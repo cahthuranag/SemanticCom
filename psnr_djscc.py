@@ -9,101 +9,159 @@ import os
 # Import from original PSNR code
 from psnr_all import (build_model, get_dataset, train, test)
 
+class ModernStyle:
+    # Color scheme
+    PRIMARY_COLOR = "#2c3e50"  # Dark blue-gray
+    SECONDARY_COLOR = "#3498db"  # Bright blue
+    ACCENT_COLOR = "#e74c3c"  # Red
+    BG_COLOR = "#ecf0f1"  # Light gray
+    TEXT_COLOR = "#2c3e50"  # Dark blue-gray
+    BUTTON_BG = "#3498db"  # Bright blue
+    BUTTON_ACTIVE = "#2980b9"  # Darker blue
+    
+    # Styles
+    FRAME_STYLE = {
+        "background": BG_COLOR,
+        "padding": 10
+    }
+    
+    LABEL_STYLE = {
+        "background": BG_COLOR,
+        "foreground": TEXT_COLOR,
+        "font": ("Helvetica", 10)
+    }
+    
+    HEADER_STYLE = {
+        "background": BG_COLOR,
+        "foreground": PRIMARY_COLOR,
+        "font": ("Helvetica", 12, "bold")
+    }
+
 class DJSCCAnalysisFrame(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
+        self.style = ModernStyle()
+        self.configure(style="Modern.TFrame")
+        self.init_styles()
         self.init_variables()
         self.create_widgets()
         self.load_data()
         
+    def init_styles(self):
+        # Configure ttk styles
+        style = ttk.Style()
+        style.configure("Modern.TFrame", background=self.style.BG_COLOR)
+        style.configure("Modern.TLabel", **self.style.LABEL_STYLE)
+        style.configure("Modern.TLabelframe", background=self.style.BG_COLOR)
+        style.configure("Modern.TLabelframe.Label", **self.style.HEADER_STYLE)
+        
+        # Custom button style
+        style.configure("Modern.TButton",
+            background=self.style.BUTTON_BG,
+            foreground="white",
+            padding=(10, 5),
+            font=("Helvetica", 9)
+        )
+        style.map("Modern.TButton",
+            background=[("active", self.style.BUTTON_ACTIVE)],
+            foreground=[("active", "white")]
+        )
+        
+        # Entry style
+        style.configure("Modern.TEntry",
+            fieldbackground="white",
+            padding=5
+        )
+
     def init_variables(self):
         # DJSCC variables
-        self.train_snr_var = tk.DoubleVar(value=10.0)  # SNR for training
-        self.channel_snr_var = tk.DoubleVar(value=10.0)  # SNR for channel transmission
+        self.train_snr_var = tk.DoubleVar(value=10.0)
+        self.channel_snr_var = tk.DoubleVar(value=10.0)
         self.block_size_var = tk.IntVar(value=16)
-        
-        # General variables
         self.status_var = tk.StringVar(value="Ready")
         self.is_training = False
         self.model = None
         self.current_image_idx = tk.IntVar(value=0)
 
     def create_widgets(self):
-        # Main container
-        main_container = ttk.Frame(self)
-        main_container.grid(row=0, column=0, sticky="nsew")
+        # Main container with padding and background
+        main_container = ttk.Frame(self, style="Modern.TFrame")
+        main_container.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
         
-        # Configure weights
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
         
-        # Create frames
         self.create_djscc_frame(main_container)
         self.create_control_frame(main_container)
 
     def create_djscc_frame(self, parent):
-        djscc_frame = ttk.LabelFrame(parent, text="DJSCC System")
-        djscc_frame.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        djscc_frame = ttk.LabelFrame(parent, text="DJSCC System", style="Modern.TLabelframe")
+        djscc_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         
-        # Parameters Frame
-        param_frame = ttk.Frame(djscc_frame)
-        param_frame.pack(fill="x", padx=5, pady=5)
+        # Parameters Frame with modern styling
+        param_frame = ttk.Frame(djscc_frame, style="Modern.TFrame")
+        param_frame.pack(fill="x", padx=10, pady=10)
         
-        # Training SNR
-        ttk.Label(param_frame, text="Training SNR (dB):").grid(row=0, column=0, pady=5, padx=5)
-        ttk.Entry(param_frame, textvariable=self.train_snr_var, width=10).grid(row=0, column=1)
+        # Training SNR with styled widgets
+        ttk.Label(param_frame, text="Training SNR (dB):", style="Modern.TLabel").grid(row=0, column=0, pady=8, padx=8)
+        ttk.Entry(param_frame, textvariable=self.train_snr_var, width=10, style="Modern.TEntry").grid(row=0, column=1)
         
         # Channel SNR
-        ttk.Label(param_frame, text="Channel SNR (dB):").grid(row=1, column=0, pady=5, padx=5)
-        ttk.Entry(param_frame, textvariable=self.channel_snr_var, width=10).grid(row=1, column=1)
+        ttk.Label(param_frame, text="Channel SNR (dB):", style="Modern.TLabel").grid(row=1, column=0, pady=8, padx=8)
+        ttk.Entry(param_frame, textvariable=self.channel_snr_var, width=10, style="Modern.TEntry").grid(row=1, column=1)
         
         # Block Size
-        ttk.Label(param_frame, text="Block Size:").grid(row=2, column=0, pady=5, padx=5)
-        ttk.Entry(param_frame, textvariable=self.block_size_var, width=10).grid(row=2, column=1)
+        ttk.Label(param_frame, text="Block Size:", style="Modern.TLabel").grid(row=2, column=0, pady=8, padx=8)
+        ttk.Entry(param_frame, textvariable=self.block_size_var, width=10, style="Modern.TEntry").grid(row=2, column=1)
         
-        # Buttons
-        btn_frame = ttk.Frame(djscc_frame)
-        btn_frame.pack(fill="x", padx=5, pady=5)
+        # Buttons Frame
+        btn_frame = ttk.Frame(djscc_frame, style="Modern.TFrame")
+        btn_frame.pack(fill="x", padx=10, pady=10)
         
-        ttk.Button(btn_frame, text="Train New Model",
+        # Styled buttons
+        ttk.Button(btn_frame, text="Train New Model", style="Modern.TButton",
                   command=self.start_training).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Load & Process",
+        ttk.Button(btn_frame, text="Load & Process", style="Modern.TButton",
                   command=self.process_djscc).pack(side="left", padx=5)
         
         # Display Frame
-        display_frame = ttk.Frame(djscc_frame)
-        display_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        display_frame = ttk.Frame(djscc_frame, style="Modern.TFrame")
+        display_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Create image labels
-        self.input_label = ttk.Label(display_frame)
-        self.input_label.grid(row=0, column=0, padx=5)
+        # Image display with modern styling
+        self.input_label = ttk.Label(display_frame, style="Modern.TLabel")
+        self.input_label.grid(row=0, column=0, padx=10)
         
-        ttk.Label(display_frame, text="→").grid(row=0, column=1)
+        arrow_label = ttk.Label(display_frame, text="→", style="Modern.TLabel", font=("Helvetica", 16, "bold"))
+        arrow_label.grid(row=0, column=1)
         
-        self.encoded_label = ttk.Label(display_frame)
-        self.encoded_label.grid(row=0, column=2, padx=5)
+        self.encoded_label = ttk.Label(display_frame, style="Modern.TLabel")
+        self.encoded_label.grid(row=0, column=2, padx=10)
         
-        ttk.Label(display_frame, text="→").grid(row=0, column=3)
+        arrow_label2 = ttk.Label(display_frame, text="→", style="Modern.TLabel", font=("Helvetica", 16, "bold"))
+        arrow_label2.grid(row=0, column=3)
         
-        self.output_label = ttk.Label(display_frame)
-        self.output_label.grid(row=0, column=4, padx=5)
+        self.output_label = ttk.Label(display_frame, style="Modern.TLabel")
+        self.output_label.grid(row=0, column=4, padx=10)
         
-        # Labels
-        ttk.Label(display_frame, text="Input").grid(row=1, column=0)
-        ttk.Label(display_frame, text="Encoded").grid(row=1, column=2)
-        ttk.Label(display_frame, text="Output").grid(row=1, column=4)
+        # Image labels with modern styling
+        ttk.Label(display_frame, text="Input", style="Modern.TLabel", font=("Helvetica", 10, "bold")).grid(row=1, column=0)
+        ttk.Label(display_frame, text="Encoded", style="Modern.TLabel", font=("Helvetica", 10, "bold")).grid(row=1, column=2)
+        ttk.Label(display_frame, text="Output", style="Modern.TLabel", font=("Helvetica", 10, "bold")).grid(row=1, column=4)
 
     def create_control_frame(self, parent):
-        control_frame = ttk.LabelFrame(parent, text="Image Control")
-        control_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        control_frame = ttk.LabelFrame(parent, text="Image Control", style="Modern.TLabelframe")
+        control_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         
-        ttk.Label(control_frame, text="Image Index:").pack(side="left", padx=5)
-        ttk.Entry(control_frame, textvariable=self.current_image_idx, width=5).pack(side="left", padx=5)
-        ttk.Button(control_frame, text="Load Image", 
-                  command=self.load_selected_image).pack(side="left", padx=5)
+        # Control elements with modern styling
+        ttk.Label(control_frame, text="Image Index:", style="Modern.TLabel").pack(side="left", padx=8)
+        ttk.Entry(control_frame, textvariable=self.current_image_idx, width=5, style="Modern.TEntry").pack(side="left", padx=8)
+        ttk.Button(control_frame, text="Load Image", style="Modern.TButton",
+                  command=self.load_selected_image).pack(side="left", padx=8)
         
-        ttk.Label(control_frame, textvariable=self.status_var).pack(side="right", padx=5)
-
+        # Status label with modern styling
+        status_label = ttk.Label(control_frame, textvariable=self.status_var, style="Modern.TLabel")
+        status_label.pack(side="right", padx=8)
     def load_data(self):
         try:
             _, _, self.x_test = get_dataset()

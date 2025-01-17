@@ -11,7 +11,7 @@ class CombinedAccuracyFrame(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         self.create_widgets()
-    
+        
     def create_widgets(self):
         # Create main frame that will hold both analyses side by side
         main_frame = ttk.Frame(self)
@@ -34,7 +34,7 @@ class SystemAnalysisFrame(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         self.create_widgets()
-    
+        
     def create_widgets(self):
         # Create main frame that will hold both systems side by side
         main_frame = ttk.Frame(self)
@@ -74,8 +74,22 @@ class MainApplication(tk.Tk):
         # Accuracy Analysis tab with both DJSCC and LDPC
         accuracy_frame = CombinedAccuracyFrame(notebook)
         notebook.add(accuracy_frame, text="Accuracy Analysis")
+        
+        # Set window size
+        window_width = 1200
+        window_height = 800
+        
+        # Get screen dimensions
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        # Calculate position coordinates
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        
+        # Set window size and position
+        self.geometry(f"{window_width}x{window_height}+{x}+{y}")
 
 if __name__ == "__main__":
     app = MainApplication()
-    app.geometry("1200x800")  # Increased size to accommodate both systems
     app.mainloop()

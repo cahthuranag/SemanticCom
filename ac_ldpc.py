@@ -7,13 +7,68 @@ from ac_all import plot_accuracy_vs_snr_ldpc, build_classifier_model
 from tensorflow.keras.datasets import cifar10
 
 class LDPCAnalysisFrame_ac(ttk.Frame):
+    # Define color scheme
+    COLORS = {
+        'primary': '#2c3e50',    # Dark blue-gray
+        'secondary': '#3498db',  # Bright blue
+        'accent': '#e74c3c',     # Red
+        'bg': '#ecf0f1',        # Light gray
+        'text': '#2c3e50',      # Dark blue-gray
+        'success': '#27ae60',    # Green
+        'warning': '#f39c12'     # Orange
+    }
     
     def __init__(self, parent):
         super().__init__(parent)
         self.init_variables()
+        self.setup_styles()
         self.create_widgets()
         self.check_model_files()
         
+    def setup_styles(self):
+        """Configure custom styles for widgets"""
+        style = ttk.Style()
+        
+        # Configure main window
+        style.configure('Main.TFrame', background=self.COLORS['bg'])
+        
+        # Configure labels
+        style.configure('Custom.TLabel', 
+                       background=self.COLORS['bg'],
+                       foreground=self.COLORS['text'],
+                       font=('Helvetica', 10))
+                       
+        # Configure label frames
+        style.configure('Custom.TLabelframe', 
+                       background=self.COLORS['bg'],
+                       foreground=self.COLORS['primary'])
+        style.configure('Custom.TLabelframe.Label', 
+                       font=('Helvetica', 11, 'bold'),
+                       foreground=self.COLORS['primary'])
+        
+        # Configure buttons
+        style.configure('Train.TButton',
+                       background=self.COLORS['secondary'],
+                       foreground='white',
+                       padding=(20, 10),
+                       font=('Helvetica', 10, 'bold'))
+        
+        style.configure('Test.TButton',
+                       background=self.COLORS['accent'],
+                       foreground='white',
+                       padding=(20, 10),
+                       font=('Helvetica', 10, 'bold'))
+                       
+        # Configure entry fields
+        style.configure('Custom.TEntry', 
+                       fieldbackground='white',
+                       padding=5)
+                       
+        # Configure combobox
+        style.configure('Custom.TCombobox',
+                       background='white',
+                       padding=5)
+
     def init_variables(self):
         # LDPC variables
         self.k_var = tk.IntVar(value=1364)
@@ -45,22 +100,27 @@ class LDPCAnalysisFrame_ac(ttk.Frame):
             self.status_var.set("Training required.")
 
     def create_widgets(self):
+        self.configure(style='Main.TFrame')
+        
         # Configure main grid
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
         
         # Parameters Frame
-        params_frame = ttk.LabelFrame(self, text="LDPC Parameters")
+        params_frame = ttk.LabelFrame(self, text="LDPC Parameters", style='Custom.TLabelframe')
         params_frame.grid(row=0, column=0, padx=10, pady=5, sticky="nsew")
         
         # Bandwidth Ratio Selection
-        ttk.Label(params_frame, text="Bandwidth Ratio:").grid(row=0, column=0, padx=5, pady=2, sticky="e")
-        br_combo = ttk.Combobox(params_frame, textvariable=self.br_var, values=["1/3", "1/6"], state="readonly", width=9)
+        ttk.Label(params_frame, text="Bandwidth Ratio:", 
+                 style='Custom.TLabel').grid(row=0, column=0, padx=5, pady=2, sticky="e")
+        br_combo = ttk.Combobox(params_frame, textvariable=self.br_var,
+                               values=["1/3", "1/6"], state="readonly", width=9,
+                               style='Custom.TCombobox')
         br_combo.grid(row=0, column=1, padx=5, pady=2, sticky="w")
         br_combo.bind('<<ComboboxSelected>>', self.on_br_changed)
         
         # Dynamic parameter frame
-        self.dynamic_params_frame = ttk.Frame(params_frame)
+        self.dynamic_params_frame = ttk.Frame(params_frame, style='Main.TFrame')
         self.dynamic_params_frame.grid(row=1, column=0, columnspan=2, pady=5)
         self.update_parameter_inputs()
         
@@ -68,32 +128,43 @@ class LDPCAnalysisFrame_ac(ttk.Frame):
         self.create_labeled_entry(params_frame, "SNR (dB):", self.snr_var, 2)
 
         # Results Frame
-        results_frame = ttk.LabelFrame(self, text="Results")
+        results_frame = ttk.LabelFrame(self, text="Results", style='Custom.TLabelframe')
         results_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
         
         # Create Text widget for results
-        self.results_text = tk.Text(results_frame, height=10, width=50)
+        self.results_text = tk.Text(results_frame, height=10, width=50,
+                                  bg='white',
+                                  fg=self.COLORS['text'],
+                                  font=('Consolas', 10),
+                                  relief='solid',
+                                  borderwidth=1)
         self.results_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # Control Frame
-        control_frame = ttk.Frame(self)
+        control_frame = ttk.Frame(self, style='Main.TFrame')
         control_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
         
         # Train and Test buttons
-        self.train_button = ttk.Button(control_frame, text="Train Classifier", 
+        self.train_button = ttk.Button(control_frame, text="Train Classifier",
+                                     style='Train.TButton',
                                      command=self.on_train_clicked)
         self.train_button.pack(side="left", padx=5)
         
-        self.test_button = ttk.Button(control_frame, text="Run Analysis", 
+        self.test_button = ttk.Button(control_frame, text="Run Analysis",
+                                    style='Test.TButton',
                                     command=self.on_test_clicked)
         self.test_button.pack(side="left", padx=5)
         
-        ttk.Label(control_frame, textvariable=self.status_var).pack(side="right", padx=5)
+        # Status label
+        status_label = ttk.Label(control_frame, textvariable=self.status_var,
+                               style='Custom.TLabel')
+        status_label.pack(side="right", padx=5)
 
     def create_labeled_entry(self, parent, label_text, variable, row, column_offset=0):
-        """Helper method to create a labeled entry with consistent styling"""
-        ttk.Label(parent, text=label_text).grid(row=row, column=0+column_offset, padx=5, pady=2, sticky="e")
-        entry = ttk.Entry(parent, textvariable=variable, width=12)
+        """Helper method to create a labeled entry with custom styling"""
+        ttk.Label(parent, text=label_text, 
+                 style='Custom.TLabel').grid(row=row, column=0+column_offset, padx=5, pady=2, sticky="e")
+        entry = ttk.Entry(parent, textvariable=variable, width=12, style='Custom.TEntry')
         entry.grid(row=row, column=1+column_offset, padx=5, pady=2, sticky="w")
         return entry
 
@@ -218,9 +289,8 @@ def main():
     root.title("LDPC Analysis")
     root.geometry("500x600")
     
-    style = ttk.Style()
-    style.configure('TLabelframe', padding=5)
-    style.configure('TButton', padding=5)
+    # Set window background color
+    root.configure(bg=LDPCAnalysisFrame_ac.COLORS['bg'])
     
     app = LDPCAnalysisFrame_ac(root)
     app.pack(expand=True, fill="both", padx=10, pady=10)

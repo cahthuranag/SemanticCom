@@ -297,7 +297,7 @@ def build_djscc_model(snrdb, blocksize):
 def train_djscc(train_snrdb, x_train, y_train, x_val, y_val, blocksize):
     model = build_djscc_model(train_snrdb, blocksize)
     early_stopping = EarlyStopping(monitor='accuracy', mode='max', patience=50, restore_best_weights=True, verbose=1)
-    history = model.fit(x_train, y_train, epochs=2, batch_size=128, validation_data=(x_val, y_val), callbacks=[early_stopping], verbose=1)
+    history = model.fit(x_train, y_train, epochs=200, batch_size=128, validation_data=(x_val, y_val), callbacks=[early_stopping], verbose=1)
     if os.path.exists('model_weights.h5'):
         os.remove('model_weights.h5')
     model.save_weights('model_weights.h5')
@@ -374,7 +374,7 @@ def calculate_accuracy_ldpc(bw_ratio, k, n, m, snrs, num_images=100):
     (x_train, y_train), _ = cifar10.load_data()
     x_train = x_train.astype('float32') / 255.0
     EarlyStopping = tf.keras.callbacks.EarlyStopping(monitor='accuracy', mode='max', patience=50, restore_best_weights=True)
-    classifier_model.fit(x_train, y_train, batch_size=128, epochs=2, validation_split=0.1, verbose=1, callbacks=[EarlyStopping])
+    classifier_model.fit(x_train, y_train, batch_size=128, epochs=50, validation_split=0.1, verbose=1, callbacks=[EarlyStopping])
     
     # Save the trained model weights
     classifier_model.save_weights('classifier_model_weights_ldpc.h5')

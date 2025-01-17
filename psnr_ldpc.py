@@ -9,13 +9,70 @@ import os
 # Import from original code
 from psnr_all import (get_dataset, calculate_psnr, LDPCTransmitter)
 
+class ModernStyle:
+    # Color scheme
+    PRIMARY_COLOR = "#2c3e50"  # Dark blue-gray
+    SECONDARY_COLOR = "#3498db"  # Bright blue
+    ACCENT_COLOR = "#e74c3c"  # Red
+    BG_COLOR = "#ecf0f1"  # Light gray
+    TEXT_COLOR = "#2c3e50"  # Dark blue-gray
+    BUTTON_BG = "#3498db"  # Bright blue
+    BUTTON_ACTIVE = "#2980b9"  # Darker blue
+    
+    # Styles
+    FRAME_STYLE = {
+        "background": BG_COLOR,
+        "padding": 10
+    }
+    
+    LABEL_STYLE = {
+        "background": BG_COLOR,
+        "foreground": TEXT_COLOR,
+        "font": ("Helvetica", 10)
+    }
+    
+    HEADER_STYLE = {
+        "background": BG_COLOR,
+        "foreground": PRIMARY_COLOR,
+        "font": ("Helvetica", 12, "bold")
+    }
+
 class LDPCAnalysisFrame(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
+        self.style = ModernStyle()
+        self.configure(style="Modern.TFrame")
+        self.init_styles()
         self.init_variables()
         self.create_widgets()
         self.load_data()
         
+    def init_styles(self):
+        # Configure ttk styles
+        style = ttk.Style()
+        style.configure("Modern.TFrame", background=self.style.BG_COLOR)
+        style.configure("Modern.TLabel", **self.style.LABEL_STYLE)
+        style.configure("Modern.TLabelframe", background=self.style.BG_COLOR)
+        style.configure("Modern.TLabelframe.Label", **self.style.HEADER_STYLE)
+        
+        # Custom button style
+        style.configure("Modern.TButton",
+            background=self.style.BUTTON_BG,
+            foreground="white",
+            padding=(10, 5),
+            font=("Helvetica", 9)
+        )
+        style.map("Modern.TButton",
+            background=[("active", self.style.BUTTON_ACTIVE)],
+            foreground=[("active", "white")]
+        )
+        
+        # Entry style
+        style.configure("Modern.TEntry",
+            fieldbackground="white",
+            padding=5
+        )
+
     def init_variables(self):
         # LDPC parameters
         self.bw_ratio_var = tk.DoubleVar(value=1/3)
@@ -29,83 +86,89 @@ class LDPCAnalysisFrame(ttk.Frame):
         self.current_image_idx = tk.IntVar(value=0)
 
     def create_widgets(self):
-        main_container = ttk.Frame(self)
-        main_container.grid(row=0, column=0, sticky="nsew")
+        # Main container with padding and background
+        main_container = ttk.Frame(self, style="Modern.TFrame")
+        main_container.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
         
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
         
-        # Create frames
         self.create_ldpc_frame(main_container)
         self.create_control_frame(main_container)
 
     def create_ldpc_frame(self, parent):
-        ldpc_frame = ttk.LabelFrame(parent, text="LDPC System")
-        ldpc_frame.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        ldpc_frame = ttk.LabelFrame(parent, text="LDPC + BPG System", style="Modern.TLabelframe")
+        ldpc_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         
-        # Parameters Frame
-        param_frame = ttk.Frame(ldpc_frame)
-        param_frame.pack(fill="x", padx=5, pady=5)
+        # Parameters Frame with modern styling
+        param_frame = ttk.Frame(ldpc_frame, style="Modern.TFrame")
+        param_frame.pack(fill="x", padx=10, pady=10)
         
-        # BW Ratio
-        ttk.Label(param_frame, text="BW Ratio:").grid(row=0, column=0, pady=5, padx=5)
-        ttk.Entry(param_frame, textvariable=self.bw_ratio_var, width=10).grid(row=0, column=1)
+        # Create parameter entries with consistent spacing and styling
+        params = [
+            ("BW Ratio:", self.bw_ratio_var),
+            ("K:", self.k_var),
+            ("N:", self.n_var),
+            ("M:", self.m_var),
+            ("SNR (dB):", self.snr_var)
+        ]
         
-        # K value
-        ttk.Label(param_frame, text="K:").grid(row=1, column=0, pady=5, padx=5)
-        ttk.Entry(param_frame, textvariable=self.k_var, width=10).grid(row=1, column=1)
+        for idx, (label_text, var) in enumerate(params):
+            ttk.Label(param_frame, text=label_text, style="Modern.TLabel").grid(
+                row=idx, column=0, pady=8, padx=8, sticky="e"
+            )
+            ttk.Entry(param_frame, textvariable=var, width=10, style="Modern.TEntry").grid(
+                row=idx, column=1, pady=8, padx=8, sticky="w"
+            )
         
-        # N value
-        ttk.Label(param_frame, text="N:").grid(row=2, column=0, pady=5, padx=5)
-        ttk.Entry(param_frame, textvariable=self.n_var, width=10).grid(row=2, column=1)
-        
-        # M value
-        ttk.Label(param_frame, text="M:").grid(row=3, column=0, pady=5, padx=5)
-        ttk.Entry(param_frame, textvariable=self.m_var, width=10).grid(row=3, column=1)
-        
-        # SNR
-        ttk.Label(param_frame, text="SNR (dB):").grid(row=4, column=0, pady=5, padx=5)
-        ttk.Entry(param_frame, textvariable=self.snr_var, width=10).grid(row=4, column=1)
-        
-        # Process Button
-        btn_frame = ttk.Frame(ldpc_frame)
-        btn_frame.pack(fill="x", padx=5, pady=5)
-        ttk.Button(btn_frame, text="Process LDPC", 
+        # Process Button with modern styling
+        btn_frame = ttk.Frame(ldpc_frame, style="Modern.TFrame")
+        btn_frame.pack(fill="x", padx=10, pady=10)
+        ttk.Button(btn_frame, text="Process LDPC + BPG ", style="Modern.TButton",
                   command=self.process_ldpc).pack(side="left", padx=5)
         
-        # Display Frame
-        display_frame = ttk.Frame(ldpc_frame)
-        display_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        # Display Frame with improved layout
+        display_frame = ttk.Frame(ldpc_frame, style="Modern.TFrame")
+        display_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Create image labels
-        self.input_label = ttk.Label(display_frame)
-        self.input_label.grid(row=0, column=0, padx=5)
+        # Image labels with consistent spacing
+        self.input_label = ttk.Label(display_frame, style="Modern.TLabel")
+        self.input_label.grid(row=0, column=0, padx=10)
         
-        ttk.Label(display_frame, text="→").grid(row=0, column=1)
+        arrow_label = ttk.Label(display_frame, text="→", style="Modern.TLabel",
+                              font=("Helvetica", 16, "bold"))
+        arrow_label.grid(row=0, column=1)
         
-        self.encoded_label = ttk.Label(display_frame)
-        self.encoded_label.grid(row=0, column=2, padx=5)
+        self.encoded_label = ttk.Label(display_frame, style="Modern.TLabel")
+        self.encoded_label.grid(row=0, column=2, padx=10)
         
-        ttk.Label(display_frame, text="→").grid(row=0, column=3)
+        arrow_label2 = ttk.Label(display_frame, text="→", style="Modern.TLabel",
+                               font=("Helvetica", 16, "bold"))
+        arrow_label2.grid(row=0, column=3)
         
-        self.output_label = ttk.Label(display_frame)
-        self.output_label.grid(row=0, column=4, padx=5)
+        self.output_label = ttk.Label(display_frame, style="Modern.TLabel")
+        self.output_label.grid(row=0, column=4, padx=10)
         
-        # Labels
-        ttk.Label(display_frame, text="Input").grid(row=1, column=0)
-        ttk.Label(display_frame, text="Encoded").grid(row=1, column=2)
-        ttk.Label(display_frame, text="Output").grid(row=1, column=4)
+        # Image labels with modern styling
+        for col, text in [(0, "Input"), (2, "Encoded"), (4, "Output")]:
+            ttk.Label(display_frame, text=text, style="Modern.TLabel",
+                     font=("Helvetica", 10, "bold")).grid(row=1, column=col)
 
     def create_control_frame(self, parent):
-        control_frame = ttk.LabelFrame(parent, text="Image Control")
-        control_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+        control_frame = ttk.LabelFrame(parent, text="Image Control", style="Modern.TLabelframe")
+        control_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         
-        ttk.Label(control_frame, text="Image Index:").pack(side="left", padx=5)
-        ttk.Entry(control_frame, textvariable=self.current_image_idx, width=5).pack(side="left", padx=5)
-        ttk.Button(control_frame, text="Load Image", 
-                  command=self.load_selected_image).pack(side="left", padx=5)
+        # Control elements with modern styling
+        ttk.Label(control_frame, text="Image Index:", style="Modern.TLabel").pack(side="left", padx=8)
+        ttk.Entry(control_frame, textvariable=self.current_image_idx,
+                 width=5, style="Modern.TEntry").pack(side="left", padx=8)
+        ttk.Button(control_frame, text="Load Image", style="Modern.TButton",
+                  command=self.load_selected_image).pack(side="left", padx=8)
         
-        ttk.Label(control_frame, textvariable=self.status_var).pack(side="right", padx=5)
+        # Status label with modern styling
+        status_label = ttk.Label(control_frame, textvariable=self.status_var,
+                               style="Modern.TLabel")
+        status_label.pack(side="right", padx=8)
 
     def load_data(self):
         try:
