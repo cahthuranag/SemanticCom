@@ -19,7 +19,7 @@ class ModernStyle:
     BUTTON_BG = "#3498db"  # Bright blue
     BUTTON_ACTIVE = "#2980b9"  # Darker blue
     
-    # Styles
+    # Styles with enlarged fonts
     FRAME_STYLE = {
         "background": BG_COLOR,
         "padding": 10
@@ -28,13 +28,13 @@ class ModernStyle:
     LABEL_STYLE = {
         "background": BG_COLOR,
         "foreground": TEXT_COLOR,
-        "font": ("Helvetica", 10)
+        "font": ("Helvetica", 12)
     }
     
     HEADER_STYLE = {
         "background": BG_COLOR,
         "foreground": PRIMARY_COLOR,
-        "font": ("Helvetica", 12, "bold")
+        "font": ("Helvetica", 14, "bold")
     }
 
 class DJSCCAnalysisFrame(ttk.Frame):
@@ -48,29 +48,30 @@ class DJSCCAnalysisFrame(ttk.Frame):
         self.load_data()
         
     def init_styles(self):
-        # Configure ttk styles
+        # Configure ttk styles with larger fonts
         style = ttk.Style()
         style.configure("Modern.TFrame", background=self.style.BG_COLOR)
         style.configure("Modern.TLabel", **self.style.LABEL_STYLE)
         style.configure("Modern.TLabelframe", background=self.style.BG_COLOR)
         style.configure("Modern.TLabelframe.Label", **self.style.HEADER_STYLE)
         
-        # Custom button style
+        # Custom button style with larger font
         style.configure("Modern.TButton",
             background=self.style.BUTTON_BG,
             foreground="white",
             padding=(10, 5),
-            font=("Helvetica", 9)
+            font=("Helvetica", 11)
         )
         style.map("Modern.TButton",
             background=[("active", self.style.BUTTON_ACTIVE)],
             foreground=[("active", "white")]
         )
         
-        # Entry style
+        # Entry style with larger font
         style.configure("Modern.TEntry",
             fieldbackground="white",
-            padding=5
+            padding=5,
+            font=("Helvetica", 11)
         )
 
     def init_variables(self):
@@ -110,9 +111,30 @@ class DJSCCAnalysisFrame(ttk.Frame):
         ttk.Label(param_frame, text="Channel SNR (dB):", style="Modern.TLabel").grid(row=1, column=0, pady=8, padx=8)
         ttk.Entry(param_frame, textvariable=self.channel_snr_var, width=10, style="Modern.TEntry").grid(row=1, column=1)
         
-        # Block Size
-        ttk.Label(param_frame, text="Block Size:", style="Modern.TLabel").grid(row=2, column=0, pady=8, padx=8)
-        ttk.Entry(param_frame, textvariable=self.block_size_var, width=10, style="Modern.TEntry").grid(row=2, column=1)
+        # Block Size controls with training-only indicator
+        block_label_frame = ttk.Frame(param_frame, style="Modern.TFrame")
+        block_label_frame.grid(row=2, column=0, pady=8, padx=8, sticky="w")
+        
+        ttk.Label(block_label_frame, text="Block Size:", style="Modern.TLabel").pack(side="left")
+        ttk.Label(block_label_frame, text="(Training Only)", 
+                 style="Modern.TLabel",
+                 font=("Helvetica", 10, "italic")).pack(side="left", padx=(4, 0))
+        
+        # Create a frame for block size controls
+        block_size_frame = ttk.Frame(param_frame, style="Modern.TFrame")
+        block_size_frame.grid(row=2, column=1, sticky="w")
+        
+        self.block_entry = ttk.Entry(block_size_frame, textvariable=self.block_size_var, 
+                                   width=6, style="Modern.TEntry")
+        self.block_entry.pack(side="left", padx=2)
+        
+        self.block_inc_btn = ttk.Button(block_size_frame, text="+", style="Modern.TButton", width=2,
+                                      command=lambda: self.block_size_var.set(self.block_size_var.get() + 4))
+        self.block_inc_btn.pack(side="left", padx=1)
+        
+        self.block_dec_btn = ttk.Button(block_size_frame, text="-", style="Modern.TButton", width=2,
+                                      command=lambda: self.block_size_var.set(max(4, self.block_size_var.get() - 4)))
+        self.block_dec_btn.pack(side="left", padx=1)
         
         # Buttons Frame
         btn_frame = ttk.Frame(djscc_frame, style="Modern.TFrame")
@@ -145,9 +167,9 @@ class DJSCCAnalysisFrame(ttk.Frame):
         self.output_label.grid(row=0, column=4, padx=10)
         
         # Image labels with modern styling
-        ttk.Label(display_frame, text="Input", style="Modern.TLabel", font=("Helvetica", 10, "bold")).grid(row=1, column=0)
-        ttk.Label(display_frame, text="Encoded", style="Modern.TLabel", font=("Helvetica", 10, "bold")).grid(row=1, column=2)
-        ttk.Label(display_frame, text="Output", style="Modern.TLabel", font=("Helvetica", 10, "bold")).grid(row=1, column=4)
+        ttk.Label(display_frame, text="Input", style="Modern.TLabel", font=("Helvetica", 12, "bold")).grid(row=1, column=0)
+        ttk.Label(display_frame, text="Encoded", style="Modern.TLabel", font=("Helvetica", 12, "bold")).grid(row=1, column=2)
+        ttk.Label(display_frame, text="Output", style="Modern.TLabel", font=("Helvetica", 12, "bold")).grid(row=1, column=4)
 
     def create_control_frame(self, parent):
         control_frame = ttk.LabelFrame(parent, text="Image Control", style="Modern.TLabelframe")
@@ -162,6 +184,14 @@ class DJSCCAnalysisFrame(ttk.Frame):
         # Status label with modern styling
         status_label = ttk.Label(control_frame, textvariable=self.status_var, style="Modern.TLabel")
         status_label.pack(side="right", padx=8)
+
+    def update_block_controls(self):
+        """Enable/disable block size controls based on model state"""
+        state = "normal" if not self.model else "disabled"
+        self.block_entry.configure(state=state)
+        self.block_inc_btn.configure(state=state)
+        self.block_dec_btn.configure(state=state)
+
     def load_data(self):
         try:
             _, _, self.x_test = get_dataset()
@@ -200,6 +230,62 @@ class DJSCCAnalysisFrame(ttk.Frame):
             train(train_snr, x_train, x_val, x_test, block_size)
             
             self.status_var.set("Training complete!")
+            self.update_block_controls()  # Disable block size controls after training
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Training error: {str(e)}")
+            self.status_var.set("Training failed!")
+        
+        finally:
+            self.is_training = False
+
+    def process_djscc(self):
+        if self.is_training:
+            messagebox.showwarning("Warning", "Please wait for training to complete")
+            return
+            
+        # Show a message about block size being fixed after model loading
+        if self.model is None:
+            messagebox.showinfo("Info", "Note: Block size cannot be changed after loading the model.")
+
+        try:
+            # Load existing model if not loaded
+            if self.model is None:
+                train_snr = self.train_snr_var.get()
+                block_size = self.block_size_var.get()
+                self.model = build_model(train_snr, block_size)
+                
+                if os.path.exists('classifier_model_weights_rec_train.h5'):
+                    self.model.load_weights('classifier_model_weights_rec_train.h5')
+                    self.update_block_controls()  # Disable block size controls after loading
+                else:
+                    raise Exception("No trained weights found")
+
+            # Process with channel SNR
+            channel_snr = self.channel_snr_var.get()
+            test_model = build_model(channel_snr, self.block_size_var.get())
+            test_model.load_weights('classifier_model_weights_rec_train.h5')
+
+            input_image = np.expand_dims(self.current_image, 0)
+            
+            # Get encoded representation
+            intermediate_model = tf.keras.Model(
+                inputs=test_model.input,
+                outputs=test_model.get_layer('layer_out').output
+            )
+            encoded = intermediate_model.predict(input_image, verbose=0)
+            
+            # Get reconstructed output
+            output = test_model.predict(input_image, verbose=0)
+            
+            # Display results
+            self.display_image(self.current_image, self.input_label)
+            self.display_encoded(encoded[0], self.encoded_label)
+            self.display_image(output[0], self.output_label)
+            
+            # Calculate PSNR
+            psnr = tf.image.psnr(self.current_image, output[0], max_val=1.0)
+            self.status_var.set(f"DJSCC PSNR: {psnr.numpy():.2f} dB (Train SNR: {self.train_snr_var.get()}dB, Channel SNR: {channel_snr}dB)")
             
         except Exception as e:
             messagebox.showerror("Error", f"Training error: {str(e)}")
@@ -275,16 +361,6 @@ class DJSCCAnalysisFrame(ttk.Frame):
         label.configure(image=photo)
         label.image = photo
 
-
 def main():
     root = tk.Tk()
     root.title("DJSCC System Demo")
-    root.geometry("800x600")
-    
-    app = DJSCCAnalysisFrame(root)
-    app.pack(expand=True, fill="both", padx=10, pady=10)
-    
-    root.mainloop()
-
-if __name__ == "__main__":
-    main()
