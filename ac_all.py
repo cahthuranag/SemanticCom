@@ -416,4 +416,3 @@ def plot_accuracy_vs_snr_ldpc(bw_ratio, k, n, m, snr_db):
     print(f"SNR values: {snr_db}")
     print(f"LDPC Accuracy values: {acc_values}")
     return acc_values
-
