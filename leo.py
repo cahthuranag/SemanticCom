@@ -482,7 +482,7 @@ class BPGDecoder():
 def train_djscc_leo(transmission_power_watts, x_train, y_train, x_val, y_val, blocksize):
     model, leo_channel = build_djscc_model_leo(transmission_power_watts, blocksize)
     early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=10, restore_best_weights=True, verbose=1)
-    history = model.fit(x_train, y_train, epochs=20, batch_size=128, 
+    history = model.fit(x_train, y_train, epochs=1, batch_size=128, 
                        validation_data=(x_val, y_val), callbacks=[early_stopping], verbose=1)
     model.save_weights('model_weights_leo.h5')
     
@@ -508,7 +508,7 @@ def calculate_accuracy_ldpc_leo(bw_ratio, k, n, m, transmission_power_watts, num
     (x_train, y_train), _ = cifar10.load_data()
     x_train = x_train.astype('float32') / 255.0
     early_stopping = EarlyStopping(monitor='accuracy', mode='max', patience=10, restore_best_weights=True)
-    classifier_model.fit(x_train, y_train, batch_size=128, epochs=20, validation_split=0.1, verbose=0, callbacks=[early_stopping])
+    classifier_model.fit(x_train, y_train, batch_size=128, epochs=1, validation_split=0.1, verbose=0, callbacks=[early_stopping])
     
     classifier_model.save_weights('classifier_model_weights_ldpc_leo.h5')
 
@@ -1021,7 +1021,7 @@ def run_comprehensive_simulation_with_aomi():
         return None
 
 def plot_accuracy_results(accuracy_results_dict):
-    """Plot accuracy results from simulation with proper axis labels"""
+    """Plot accuracy results from simulation with proper mathematical symbols"""
     try:
         powers = list(accuracy_results_dict.keys())
         djscc_acc = [accuracy_results_dict[p]['djscc_accuracy'] for p in powers]
@@ -1032,9 +1032,10 @@ def plot_accuracy_results(accuracy_results_dict):
         
         plt.figure(figsize=(10, 6))
         
-        plt.plot(powers, djscc_acc, 'o-', linewidth=2, markersize=8, label='DJSCC')
-        plt.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-        plt.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive Method')
+        # Use mathematical symbols from the paper with LDPC+BPG label
+        plt.plot(powers, djscc_acc, 'o-', linewidth=2, markersize=8, label='DJSCC', color='blue')
+        plt.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG', color='green')
+        plt.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive', color='red')
         
         # Mark the points where adaptive method switches
         for i, (power, method) in enumerate(zip(powers, methods_used)):
@@ -1045,8 +1046,9 @@ def plot_accuracy_results(accuracy_results_dict):
                 plt.plot(power, adaptive_acc[i], 'bs', markersize=10, markeredgewidth=2, 
                         markeredgecolor='blue', fillstyle='none')
         
-        plt.xlabel('$P_T$ (W)', fontsize=14)
-        plt.ylabel('Classification Accuracy', fontsize=14)
+        # Use proper mathematical symbols for axes
+        plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
+        plt.ylabel('Classification Accuracy $\\rho$', fontsize=14)
         plt.grid(True, alpha=0.3)
         plt.legend(fontsize=12)
         plt.xscale('log')
@@ -1058,8 +1060,156 @@ def plot_accuracy_results(accuracy_results_dict):
     except Exception as e:
         print(f"Error plotting accuracy results: {e}")
 
+def plot_aomi_results(aomi_results):
+    """
+    Plot AAoMI results with proper mathematical symbols as in the paper
+    """
+    try:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        
+        # Plot 1: AAoMI vs Transmission Power
+        ax1.plot(aomi_results['transmission_powers'], aomi_results['aomi_djscc'], 
+                'o-', linewidth=2, markersize=8, label='DJSCC', color='blue')
+        ax1.plot(aomi_results['transmission_powers'], aomi_results['aomi_trad'], 
+                's-', linewidth=2, markersize=8, label='LDPC+BPG', color='green')
+        ax1.plot(aomi_results['transmission_powers'], aomi_results['aomi_adaptive'], 
+                '^-', linewidth=2, markersize=8, label='Adaptive', color='red')
+        
+        ax1.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
+        ax1.set_ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(fontsize=12)
+        ax1.set_xscale('log')
+        
+        # Plot 2: AAoMI vs SNR
+        ax2.plot(aomi_results['snr_values'], aomi_results['aomi_djscc'], 
+                'o-', linewidth=2, markersize=8, label='DJSCC', color='blue')
+        ax2.plot(aomi_results['snr_values'], aomi_results['aomi_trad'], 
+                's-', linewidth=2, markersize=8, label='LDPC+BPG', color='green')
+        ax2.plot(aomi_results['snr_values'], aomi_results['aomi_adaptive'], 
+                '^-', linewidth=2, markersize=8, label='Adaptive', color='red')
+        
+        # Mark SNR threshold with proper symbol
+        threshold_snr = 5.0
+        ax2.axvline(x=threshold_snr, color='red', linestyle='--', alpha=0.7, 
+                   label=f'Threshold $\\gamma_{{\\text{{th}}}} = {threshold_snr}$ dB')
+        
+        ax2.set_xlabel('SNR $\\gamma$ (dB)', fontsize=14)
+        ax2.set_ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(fontsize=12)
+        
+        plt.tight_layout()
+        plt.savefig('aomi_analysis.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+    except Exception as e:
+        print(f"Error in plotting AAoMI results: {e}")
+
+def plot_comprehensive_comparison(accuracy_results_dict, aomi_results):
+    """
+    Create two separate comprehensive graphs for accuracy and AAoMI
+    """
+    try:
+        # Extract data for accuracy plot
+        powers_acc = list(accuracy_results_dict.keys())
+        djscc_acc = [accuracy_results_dict[p]['djscc_accuracy'] for p in powers_acc]
+        ldpc_acc = [accuracy_results_dict[p]['ldpc_accuracy'] for p in powers_acc]
+        adaptive_acc = [accuracy_results_dict[p]['adaptive_accuracy'] for p in powers_acc]
+        methods_used = [accuracy_results_dict[p]['adaptive_method'] for p in powers_acc]
+        
+        # Extract data for AAoMI plot
+        powers_aomi = aomi_results['transmission_powers']
+        djscc_aomi = aomi_results['aomi_djscc']
+        ldpc_aomi = aomi_results['aomi_trad']  # This is LDPC+BPG
+        adaptive_aomi = aomi_results['aomi_adaptive']
+        
+        # Create two separate figures
+        plt.figure(figsize=(10, 6))
+        
+        # Graph 1: Classification Accuracy
+        plt.plot(powers_acc, djscc_acc, 'o-', linewidth=2, markersize=8, 
+                label='DJSCC', color='blue')
+        plt.plot(powers_acc, ldpc_acc, 's-', linewidth=2, markersize=8, 
+                label='LDPC+BPG', color='green')
+        plt.plot(powers_acc, adaptive_acc, '^-', linewidth=2, markersize=8, 
+                label='Adaptive', color='red')
+        
+        # Mark adaptive method switching points
+        for i, (power, method) in enumerate(zip(powers_acc, methods_used)):
+            if method == "DJSCC":
+                plt.plot(power, adaptive_acc[i], 'ro', markersize=10, 
+                        markeredgewidth=2, markeredgecolor='red', fillstyle='none')
+            elif method == "LDPC+BPG":
+                plt.plot(power, adaptive_acc[i], 'bs', markersize=10, 
+                        markeredgewidth=2, markeredgecolor='blue', fillstyle='none')
+        
+        plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
+        plt.ylabel('Classification Accuracy $\\rho$', fontsize=14)
+        plt.title('Classification Accuracy vs Transmission Power', fontsize=16)
+        plt.grid(True, alpha=0.3)
+        plt.legend(fontsize=12)
+        plt.xscale('log')
+        plt.tight_layout()
+        plt.savefig('classification_accuracy_results.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        # Graph 2: Network AAoMI
+        plt.figure(figsize=(10, 6))
+        plt.plot(powers_aomi, djscc_aomi, 'o-', linewidth=2, markersize=8, 
+                label='DJSCC', color='blue')
+        plt.plot(powers_aomi, ldpc_aomi, 's-', linewidth=2, markersize=8, 
+                label='LDPC+BPG', color='green')
+        plt.plot(powers_aomi, adaptive_aomi, '^-', linewidth=2, markersize=8, 
+                label='Adaptive', color='red')
+        
+        plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
+        plt.ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
+        plt.title('Network AAoMI vs Transmission Power', fontsize=16)
+        plt.grid(True, alpha=0.3)
+        plt.legend(fontsize=12)
+        plt.xscale('log')
+        plt.tight_layout()
+        plt.savefig('network_aomi_results.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+    except Exception as e:
+        print(f"Error in comprehensive comparison plotting: {e}")
+
+def create_aomi_dataframe(aomi_results):
+    """
+    Create detailed dataframe for AAoMI results with LDPC+BPG label
+    """
+    try:
+        aomi_df = pd.DataFrame({
+            'Transmission_Power_W': aomi_results['transmission_powers'],
+            'SNR_dB': aomi_results['snr_values'],
+            'DJSCC_AAoMI': aomi_results['aomi_djscc'],
+            'LDPC_BPG_AAoMI': aomi_results['aomi_trad'],  # Changed from Traditional to LDPC+BPG
+            'Adaptive_AAoMI': aomi_results['aomi_adaptive']
+        })
+        
+        print("\n=== AAoMI Analysis Results ===")
+        print(aomi_df.to_string(index=False))
+        
+        # Calculate improvements with LDPC+BPG label
+        djscc_improvement = np.mean([(t - d) / t for d, t in 
+                                   zip(aomi_results['aomi_djscc'], aomi_results['aomi_trad'])]) * 100
+        adaptive_improvement = np.mean([(t - a) / t for a, t in 
+                                      zip(aomi_results['aomi_adaptive'], aomi_results['aomi_trad'])]) * 100
+        
+        print(f"\n=== AAoMI Improvement Summary ===")
+        print(f"DJSCC reduces AAoMI by {djscc_improvement:.1f}% compared to LDPC+BPG")
+        print(f"Adaptive method reduces AAoMI by {adaptive_improvement:.1f}% compared to LDPC+BPG")
+        
+        return aomi_df
+        
+    except Exception as e:
+        print(f"Error creating AAoMI dataframe: {e}")
+        return None
+
 def create_comprehensive_dataframe(accuracy_results_dict, aomi_results):
-    """Create comprehensive dataframe with both accuracy and AAoMI results"""
+    """Create comprehensive dataframe with both accuracy and AAoMI results using LDPC+BPG"""
     try:
         powers = list(accuracy_results_dict.keys())
         
@@ -1075,11 +1225,11 @@ def create_comprehensive_dataframe(accuracy_results_dict, aomi_results):
                     'Transmission_Power_W': power,
                     'SNR_dB': acc_data['adaptive_snr'],
                     'DJSCC_Accuracy': acc_data['djscc_accuracy'],
-                    'LDPC_Accuracy': acc_data['ldpc_accuracy'],
+                    'LDPC_BPG_Accuracy': acc_data['ldpc_accuracy'],  # Changed from LDPC to LDPC_BPG
                     'Adaptive_Accuracy': acc_data['adaptive_accuracy'],
                     'Adaptive_Method': acc_data['adaptive_method'],
                     'DJSCC_AAoMI': aomi_results['aomi_djscc'][aomi_idx],
-                    'Traditional_AAoMI': aomi_results['aomi_trad'][aomi_idx],
+                    'LDPC_BPG_AAoMI': aomi_results['aomi_trad'][aomi_idx],  # Changed from Traditional
                     'Adaptive_AAoMI': aomi_results['aomi_adaptive'][aomi_idx]
                 })
         
@@ -1088,20 +1238,20 @@ def create_comprehensive_dataframe(accuracy_results_dict, aomi_results):
         print("\n=== Comprehensive Simulation Results ===")
         print(comprehensive_df.to_string(index=False))
         
-        # Calculate summary statistics
+        # Calculate summary statistics with LDPC+BPG label
         print("\n=== Summary Statistics ===")
         print(f"Accuracy - DJSCC: {np.mean([d['DJSCC_Accuracy'] for d in data]):.4f} ± {np.std([d['DJSCC_Accuracy'] for d in data]):.4f}")
-        print(f"Accuracy - LDPC: {np.mean([d['LDPC_Accuracy'] for d in data]):.4f} ± {np.std([d['LDPC_Accuracy'] for d in data]):.4f}")
+        print(f"Accuracy - LDPC+BPG: {np.mean([d['LDPC_BPG_Accuracy'] for d in data]):.4f} ± {np.std([d['LDPC_BPG_Accuracy'] for d in data]):.4f}")
         print(f"Accuracy - Adaptive: {np.mean([d['Adaptive_Accuracy'] for d in data]):.4f} ± {np.std([d['Adaptive_Accuracy'] for d in data]):.4f}")
         
         print(f"AAoMI - DJSCC: {np.mean([d['DJSCC_AAoMI'] for d in data]):.4f} ± {np.std([d['DJSCC_AAoMI'] for d in data]):.4f}")
-        print(f"AAoMI - Traditional: {np.mean([d['Traditional_AAoMI'] for d in data]):.4f} ± {np.std([d['Traditional_AAoMI'] for d in data]):.4f}")
+        print(f"AAoMI - LDPC+BPG: {np.mean([d['LDPC_BPG_AAoMI'] for d in data]):.4f} ± {np.std([d['LDPC_BPG_AAoMI'] for d in data]):.4f}")
         print(f"AAoMI - Adaptive: {np.mean([d['Adaptive_AAoMI'] for d in data]):.4f} ± {np.std([d['Adaptive_AAoMI'] for d in data]):.4f}")
         
-        # Calculate improvements
-        aomi_improvement = (np.mean([d['Traditional_AAoMI'] for d in data]) - 
-                          np.mean([d['Adaptive_AAoMI'] for d in data])) / np.mean([d['Traditional_AAoMI'] for d in data]) * 100
-        print(f"Adaptive method reduces AAoMI by {aomi_improvement:.1f}% compared to Traditional")
+        # Calculate improvements with LDPC+BPG label
+        aomi_improvement = (np.mean([d['LDPC_BPG_AAoMI'] for d in data]) - 
+                          np.mean([d['Adaptive_AAoMI'] for d in data])) / np.mean([d['LDPC_BPG_AAoMI'] for d in data]) * 100
+        print(f"Adaptive method reduces AAoMI by {aomi_improvement:.1f}% compared to LDPC+BPG")
         
         return comprehensive_df
         
@@ -1109,7 +1259,7 @@ def create_comprehensive_dataframe(accuracy_results_dict, aomi_results):
         print(f"Error creating comprehensive dataframe: {e}")
         return None
 
-# Main execution
+# Update the main execution to use the new plotting functions
 if __name__ == "__main__":
     # Run comprehensive simulation with both accuracy and AAoMI
     comprehensive_results = run_comprehensive_simulation_with_aomi()
@@ -1150,5 +1300,20 @@ if __name__ == "__main__":
         
         # Calculate AAoMI with extended power range
         extended_aomi = calculate_network_aomi_from_simulation(extended_powers, accuracy_model)
+        
+        # Create the two separate graphs
+        plot_comprehensive_comparison(accuracy_model, extended_aomi)
+        
+        # Also create individual detailed plots
+        plot_accuracy_results(accuracy_model)
         plot_aomi_results(extended_aomi)
+        
         extended_df = create_aomi_dataframe(extended_aomi)
+        
+        print("\n=== Two separate graphs generated ===")
+        print("1. classification_accuracy_results.png - Classification Accuracy vs Transmission Power")
+        print("2. network_aomi_results.png - Network AAoMI vs Transmission Power")
+        print("\n=== Methods Compared ===")
+        print("- DJSCC: Deep Joint Source-Channel Coding")
+        print("- LDPC+BPG: LDPC coding with BPG image compression")
+        print("- Adaptive: Adaptive selection between DJSCC and LDPC+BPG based on SNR threshold")

@@ -30,6 +30,19 @@ import gc
 import time
 from datetime import datetime
 
+# Set matplotlib to use LaTeX for publication-quality figures
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
+    "font.size": 12,
+    "axes.labelsize": 14,
+    "axes.titlesize": 16,
+    "legend.fontsize": 12,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12
+})
+
 tf.random.set_seed(3)
 np.random.seed(3)
 
@@ -45,8 +58,8 @@ x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.
 
 class LEOChannel:
     def __init__(self, user_id, carrier_freq=20e9, orbit_height=600e3, elevation_angle=30, 
-                 rain_rate=10, antenna_gain_tx=30, antenna_gain_rx=0, 
-                 rician_k=10, transmission_power_watts=10.0, bandwidth_hz=10e6,
+                 rain_rate=10, antenna_gain_tx=50, antenna_gain_rx=40, 
+                 rician_k=10, transmission_power_watts=100.0, bandwidth_hz=1e6,
                  noise_temperature_k=290, noise_figure_db=3):
         """
         LEO Satellite Channel Model for individual user with transmission power-based SNR calculation
@@ -74,7 +87,7 @@ class LEOChannel:
         self.snr_linear = self.calculate_snr()
         self.snr_db = 10 * np.log10(self.snr_linear)
         
-        print(f"User {user_id}: Elevation={elevation_angle}°, Rain={rain_rate}mm/h, SNR={self.snr_db:.2f}dB")
+        print(f"User {user_id}: Elevation={elevation_angle:.1f}°, Rain={rain_rate:.1f}mm/h, SNR={self.snr_db:.2f}dB")
         
     def calculate_slant_range(self):
         epsilon_rad = math.radians(self.elevation_angle)
@@ -133,7 +146,7 @@ class MultiUserLEOSystem:
     """
     Multi-user LEO satellite system with different channel conditions for each user
     """
-    def __init__(self, num_users=5, transmission_power_watts=10.0):
+    def __init__(self, num_users=5, transmission_power_watts=100.0):
         self.num_users = num_users
         self.transmission_power_watts = transmission_power_watts
         self.users = []
@@ -145,14 +158,14 @@ class MultiUserLEOSystem:
         np.random.seed(42)  # For reproducible results
         
         for i in range(self.num_users):
-            # Different elevation angles (10° to 70°)
-            elevation_angle = np.random.uniform(10, 70)
+            # Different elevation angles (20° to 80°)
+            elevation_angle = np.random.uniform(20, 80)
             
-            # Different rain rates (1mm/h to 50mm/h)
-            rain_rate = np.random.uniform(1, 50)
+            # Different rain rates (0.1mm/h to 20mm/h)
+            rain_rate = np.random.uniform(0.1, 20)
             
-            # Different Rician K factors (5dB to 20dB)
-            rician_k = np.random.uniform(5, 20)
+            # Different Rician K factors (8dB to 15dB)
+            rician_k = np.random.uniform(8, 15)
             
             # Create user channel
             user_channel = LEOChannel(
@@ -507,31 +520,38 @@ class BPGDecoder():
     def run_bpgdec(self, input_dir, output_dir='temp.png'):
         if os.path.exists(output_dir):
             os.remove(output_dir)
-        os.system(f'bpgdec {input_dir} -o {output_dir}')
-
-        if os.path.exists(output_dir):
-            return os.path.getsize(output_dir)
-        else:
-            return -1
+        result = os.system(f'bpgdec {input_dir} -o {output_dir} 2>/dev/null')
+        return result == 0
 
     def decode(self, bit_array, image_shape):
         input_dir = f'{self.working_directory}/temp_dec.bpg'
         output_dir = f'{self.working_directory}/temp_dec.png'
 
         byte_array = np.packbits(bit_array.astype(np.uint8))
-        with open(input_dir, "wb") as binary_file:
-            binary_file.write(byte_array.tobytes())
+        
+        # Ensure the BPG file has proper header
+        if len(byte_array) < 4:  # Minimum BPG file size
+            return self.get_default_image(image_shape)
+            
+        try:
+            with open(input_dir, "wb") as binary_file:
+                binary_file.write(byte_array.tobytes())
 
-        cifar_mean = np.array([0.4913997551666284, 0.48215855929893703, 0.4465309133731618]) * 255
-        cifar_mean = np.reshape(cifar_mean, [1] * (len(image_shape) - 1) + [3]).astype(np.uint8)
-
-        if self.run_bpgdec(input_dir, output_dir) < 0:
-            return 0 * np.ones(image_shape) + cifar_mean
-        else:
-            x = np.array(Image.open(output_dir).convert('RGB'))
-            if x.shape != image_shape:
-                return 0 * np.ones(image_shape) + cifar_mean
-            return x
+            if self.run_bpgdec(input_dir, output_dir) and os.path.exists(output_dir):
+                x = np.array(Image.open(output_dir).convert('RGB'))
+                if x.shape == image_shape:
+                    return x
+                else:
+                    return self.get_default_image(image_shape)
+            else:
+                return self.get_default_image(image_shape)
+                
+        except Exception as e:
+            return self.get_default_image(image_shape)
+    
+    def get_default_image(self, image_shape):
+        """Return a default image when decoding fails"""
+        return 128 * np.ones(image_shape, dtype=np.uint8)  # Gray image
 
 class AgeOfInformationAnalyzer:
     """
@@ -628,7 +648,7 @@ def test_djscc_user(leo_channel, x_test, y_test, blocksize):
     _, accuracy = model.evaluate(x_test, y_test, verbose=0)
     return accuracy
 
-def calculate_accuracy_ldpc_user(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=5):
+def calculate_accuracy_ldpc_user(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=10):
     """Calculate LDPC+BPG accuracy for a specific user using pre-trained classifier"""
     bpgencoder = BPGEncoder()
     bpgdecoder = BPGDecoder()
@@ -681,7 +701,7 @@ def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_mode
     
     return accuracy, method_used
 
-def evaluate_multi_user_system(num_users=5, transmission_powers=[0.1, 1.0, 10.0]):
+def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100.0, 200.0]):
     """
     Evaluate multi-user LEO satellite system with different transmission powers
     """
@@ -702,7 +722,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[0.1, 1.0, 10.0]
     (x_train_full, y_train_full), _ = cifar10.load_data()
     x_train_full = x_train_full.astype('float32') / 255.0
     early_stopping = EarlyStopping(monitor='accuracy', mode='max', patience=5, restore_best_weights=True)
-    classifier_model.fit(x_train_full, y_train_full, batch_size=128, epochs=3, 
+    classifier_model.fit(x_train_full, y_train_full, batch_size=128, epochs=10, 
                         validation_split=0.1, verbose=0, callbacks=[early_stopping])
     classifier_model.save_weights('classifier_model_weights_ldpc_leo.h5')
     
@@ -787,54 +807,125 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[0.1, 1.0, 10.0]
     
     return all_results
 
-def plot_multi_user_results(all_results):
-    """Plot average classification accuracy and network AAoMI results"""
-    try:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        
-        # Extract data for plotting
-        powers = [r['transmission_power'] for r in all_results]
-        djscc_acc = [r['avg_djscc_accuracy'] for r in all_results]
-        ldpc_acc = [r['avg_ldpc_accuracy'] for r in all_results]
-        adaptive_acc = [r['avg_adaptive_accuracy'] for r in all_results]
-        
-        djscc_aomi = [r['network_aomi_djscc'] for r in all_results]
-        ldpc_aomi = [r['network_aomi_ldpc'] for r in all_results]
-        adaptive_aomi = [r['network_aomi_adaptive'] for r in all_results]
-        
-        # Plot 1: Average Classification Accuracy
-        ax1.plot(powers, djscc_acc, 'o-', linewidth=2, markersize=8, label='DJSCC')
-        ax1.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-        ax1.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
-        
-        ax1.set_xlabel('Transmission Power (W)', fontsize=14)
-        ax1.set_ylabel('Average Classification Accuracy', fontsize=14)
-        ax1.set_title('Multi-User Average Classification Accuracy', fontsize=16)
-        ax1.grid(True, alpha=0.3)
-        ax1.legend(fontsize=12)
-        ax1.set_xscale('log')
-        
-        # Plot 2: Network AAoMI
-        ax2.plot(powers, djscc_aomi, 'o-', linewidth=2, markersize=8, label='DJSCC')
-        ax2.plot(powers, ldpc_aomi, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-        ax2.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
-        
-        ax2.set_xlabel('Transmission Power (W)', fontsize=14)
-        ax2.set_ylabel('Network AAoMI', fontsize=14)
-        ax2.set_title('Multi-User Network AAoMI', fontsize=16)
-        ax2.grid(True, alpha=0.3)
-        ax2.legend(fontsize=12)
-        ax2.set_xscale('log')
-        
-        plt.tight_layout()
-        plt.savefig('multi_user_analysis_results.png', dpi=300, bbox_inches='tight')
-        plt.show()
-        
-        # Print summary table
-        print_summary_table(all_results)
-        
-    except Exception as e:
-        print(f"Error in plotting multi-user results: {e}")
+def plot_separate_results(all_results):
+    """Plot separate figures for accuracy and AAoMI"""
+    # Extract data for plotting
+    powers = [r['transmission_power'] for r in all_results]
+    djscc_acc = [r['avg_djscc_accuracy'] for r in all_results]
+    ldpc_acc = [r['avg_ldpc_accuracy'] for r in all_results]
+    adaptive_acc = [r['avg_adaptive_accuracy'] for r in all_results]
+    
+    djscc_aomi = [r['network_aomi_djscc'] for r in all_results]
+    ldpc_aomi = [r['network_aomi_ldpc'] for r in all_results]
+    adaptive_aomi = [r['network_aomi_adaptive'] for r in all_results]
+    
+    # Create output directory
+    os.makedirs('results', exist_ok=True)
+    
+    # Plot 1: Average Classification Accuracy (Separate File)
+    plt.figure(figsize=(8, 6))
+    plt.plot(powers, djscc_acc, 'o-', linewidth=2, markersize=8, label='DJSCC')
+    plt.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
+    plt.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
+    
+    plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
+    plt.ylabel('Average Classification Accuracy', fontsize=14)
+    plt.title('Multi-User Average Classification Accuracy', fontsize=16)
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=12)
+    plt.xscale('log')
+    plt.tight_layout()
+    
+    # Save accuracy plots
+    plt.savefig('results/accuracy_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/accuracy_comparison.eps', format='eps', bbox_inches='tight')
+    plt.close()
+    
+    # Plot 2: Network AAoMI (Separate File)
+    plt.figure(figsize=(8, 6))
+    plt.plot(powers, djscc_aomi, 'o-', linewidth=2, markersize=8, label='DJSCC')
+    plt.plot(powers, ldpc_aomi, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
+    plt.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
+    
+    plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
+    plt.ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
+    plt.title('Multi-User Network AAoMI', fontsize=16)
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=12)
+    plt.xscale('log')
+    plt.tight_layout()
+    
+    # Save AAoMI plots
+    plt.savefig('results/aomi_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/aomi_comparison.eps', format='eps', bbox_inches='tight')
+    plt.close()
+    
+    # Also save combined plot for reference
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Combined plot - Accuracy
+    ax1.plot(powers, djscc_acc, 'o-', linewidth=2, markersize=8, label='DJSCC')
+    ax1.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
+    ax1.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
+    ax1.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
+    ax1.set_ylabel('Average Classification Accuracy', fontsize=14)
+    ax1.set_title('Multi-User Average Classification Accuracy', fontsize=16)
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=12)
+    ax1.set_xscale('log')
+    
+    # Combined plot - AAoMI
+    ax2.plot(powers, djscc_aomi, 'o-', linewidth=2, markersize=8, label='DJSCC')
+    ax2.plot(powers, ldpc_aomi, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
+    ax2.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
+    ax2.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
+    ax2.set_ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
+    ax2.set_title('Multi-User Network AAoMI', fontsize=16)
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=12)
+    ax2.set_xscale('log')
+    
+    plt.tight_layout()
+    plt.savefig('results/combined_results.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/combined_results.eps', format='eps', bbox_inches='tight')
+    plt.close()
+
+def save_separate_data_files(all_results):
+    """Save separate CSV files for accuracy and AAoMI data"""
+    # Create results directory
+    os.makedirs('results', exist_ok=True)
+    
+    # Accuracy data
+    accuracy_data = []
+    for result in all_results:
+        accuracy_data.append({
+            'transmission_power_W': result['transmission_power'],
+            'num_users': result['num_users'],
+            'djscc_accuracy': result['avg_djscc_accuracy'],
+            'ldpc_accuracy': result['avg_ldpc_accuracy'],
+            'adaptive_accuracy': result['avg_adaptive_accuracy']
+        })
+    
+    accuracy_df = pd.DataFrame(accuracy_data)
+    accuracy_df.to_csv('results/accuracy_results.csv', index=False)
+    
+    # AAoMI data
+    aomi_data = []
+    for result in all_results:
+        aomi_data.append({
+            'transmission_power_W': result['transmission_power'],
+            'num_users': result['num_users'],
+            'djscc_aomi': result['network_aomi_djscc'],
+            'ldpc_aomi': result['network_aomi_ldpc'],
+            'adaptive_aomi': result['network_aomi_adaptive']
+        })
+    
+    aomi_df = pd.DataFrame(aomi_data)
+    aomi_df.to_csv('results/aomi_results.csv', index=False)
+    
+    print("Separate data files saved:")
+    print("  - results/accuracy_results.csv")
+    print("  - results/aomi_results.csv")
 
 def print_summary_table(all_results):
     """Print comprehensive summary table"""
@@ -860,24 +951,29 @@ def print_summary_table(all_results):
         print("\nOVERALL PERFORMANCE:")
         print(f"Average Adaptive Accuracy: {avg_adaptive_acc:.4f}")
         print(f"Average Adaptive AAoMI: {avg_adaptive_aomi:.2f}")
-        print(f"AAoMI Improvement vs DJSCC: {((avg_djscc_aomi - avg_adaptive_aomi) / avg_djscc_aomi * 100):.1f}%")
-        print(f"AAoMI Improvement vs LDPC: {((avg_ldpc_aomi - avg_adaptive_aomi) / avg_ldpc_aomi * 100):.1f}%")
+        if avg_djscc_aomi > 0:
+            print(f"AAoMI Improvement vs DJSCC: {((avg_djscc_aomi - avg_adaptive_aomi) / avg_djscc_aomi * 100):.1f}%")
+        if avg_ldpc_aomi > 0:
+            print(f"AAoMI Improvement vs LDPC: {((avg_ldpc_aomi - avg_adaptive_aomi) / avg_ldpc_aomi * 100):.1f}%")
 
 # Main execution
 if __name__ == "__main__":
     # Run multi-user evaluation
     print("Starting Multi-User LEO Satellite System Evaluation...")
     
-    # Define transmission powers to test
-    transmission_powers = [1.0, 2.0, 5.0, 10.0]
-    num_users = 3
+    # Define transmission powers to test (more realistic for satellites)
+    transmission_powers = [10.0, 50.0, 100.0, 200.0]
+    num_users = 5
     
     # Run evaluation
     all_results = evaluate_multi_user_system(num_users=num_users, transmission_powers=transmission_powers)
     
     if all_results:
-        # Plot results
-        plot_multi_user_results(all_results)
+        # Plot separate results
+        plot_separate_results(all_results)
+        
+        # Save separate data files
+        save_separate_data_files(all_results)
         
         # Save detailed results
         detailed_results = []
@@ -886,7 +982,7 @@ if __name__ == "__main__":
                 detailed_results.append(user_result)
         
         detailed_df = pd.DataFrame(detailed_results)
-        detailed_df.to_csv('multi_user_detailed_results.csv', index=False)
+        detailed_df.to_csv('results/multi_user_detailed_results.csv', index=False)
         
         summary_df = pd.DataFrame([
             {
@@ -901,12 +997,21 @@ if __name__ == "__main__":
             }
             for r in all_results
         ])
-        summary_df.to_csv('multi_user_summary_results.csv', index=False)
+        summary_df.to_csv('results/multi_user_summary_results.csv', index=False)
         
         print("\n=== Multi-User Evaluation Completed Successfully ===")
         print("Results saved to:")
-        print("  - multi_user_analysis_results.png")
-        print("  - multi_user_detailed_results.csv") 
-        print("  - multi_user_summary_results.csv")
+        print("  Figures:")
+        print("    - results/accuracy_comparison.png/.eps")
+        print("    - results/aomi_comparison.png/.eps") 
+        print("    - results/combined_results.png/.eps")
+        print("  Data files:")
+        print("    - results/accuracy_results.csv")
+        print("    - results/aomi_results.csv")
+        print("    - results/multi_user_detailed_results.csv")
+        print("    - results/multi_user_summary_results.csv")
+        
+        # Print summary
+        print_summary_table(all_results)
     else:
         print("\n=== Evaluation Failed - No Results Generated ===")
