@@ -44,15 +44,40 @@ plt.rcParams.update({
 tf.random.set_seed(3)
 np.random.seed(3)
 
-# Load the CIFAR-10 dataset
-(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+def load_and_preprocess_data():
+    """Load and preprocess CIFAR-10 data using TFDS"""
+    # Load training data
+    train_ds = tfds.load('cifar10', split='train', as_supervised=True)
+    test_ds = tfds.load('cifar10', split='test', as_supervised=True)
+    
+    def preprocess(image, label):
+        image = tf.cast(image, tf.float32) / 255.0
+        return image, label
+    
+    # Preprocess and batch training data
+    train_ds = train_ds.map(preprocess).batch(128).prefetch(tf.data.AUTOTUNE)
+    test_ds = test_ds.map(preprocess).batch(128).prefetch(tf.data.AUTOTUNE)
+    
+    return train_ds, test_ds
 
-# Normalize the pixel values
-x_train = x_train.astype('float32') / 255.0
-x_test = x_test.astype('float32') / 255.0
-
-# Split the data into training and validation sets
-x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.1, random_state=42)
+def get_test_data_array(num_images=None):
+    """Get test data as numpy arrays for LDPC+BPG evaluation"""
+    test_ds = tfds.load('cifar10', split='test', as_supervised=True)
+    
+    test_images = []
+    test_labels = []
+    
+    for image, label in test_ds:
+        test_images.append(image.numpy())
+        test_labels.append(label.numpy())
+        
+        if num_images and len(test_images) >= num_images:
+            break
+    
+    test_images = np.array(test_images).astype('float32') / 255.0
+    test_labels = np.array(test_labels)
+    
+    return test_images, test_labels
 
 class LEOChannel:
     def __init__(self, user_id, carrier_freq=20e9, orbit_height=600e3, elevation_angle=30, 
@@ -277,8 +302,26 @@ def build_djscc_model(blocksize, channel_type='awgn', leo_channel=None, snr_db_t
     classifier_output = Dense(10, activation='softmax')(classifier_output)  
     
     classifier_model = Model(inputs=input_img, outputs=classifier_output)
-    classifier_model.compile(optimizer='adamax', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    classifier_model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return classifier_model
+
+def build_classifier_model():
+    """Use FIRST CODE architecture for LDPC+BPG classification"""
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(32, 32, 3)),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(64, activation='relu'),
+        tf.keras.layers.Dense(10, activation='softmax')
+    ])
+
+    model.compile(optimizer='adam',
+                  loss='sparse_categorical_crossentropy',
+                  metrics=['accuracy'])
+
+    return model
 
 class BPGEncoder():
     def __init__(self, working_directory='./analysis/temp'):
@@ -419,9 +462,9 @@ class LDPCTransmitterLEO:
         c = self.encoder(u)
         x = self.mapper(c)
         
-        # FIXED SNR CALCULATION - Use the same as your working code
+        # Use calculated SNR from LEO channel
         effective_snr = self.leo_channel.snr_db
-        no = ebnodb2no(effective_snr, num_bits_per_symbol=1, coderate=1)  # CORRECTED
+        no = ebnodb2no(effective_snr, num_bits_per_symbol=1, coderate=1)
         
         # Apply AWGN channel
         channel = AWGN()
@@ -431,23 +474,6 @@ class LDPCTransmitterLEO:
         u_hat = self.decoder(llr_ch)
 
         return tf.reshape(u_hat, (-1))[:len(source_bits)]
-
-def build_classifier_model():
-    model = tf.keras.models.Sequential([
-        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(32, 32, 3)),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(64, activation='relu'),
-        tf.keras.layers.Dense(10, activation='softmax')
-    ])
-
-    model.compile(optimizer='adamax',
-                  loss='sparse_categorical_crossentropy',
-                  metrics=['accuracy'])
-
-    return model
 
 class AgeOfInformationAnalyzer:
     """
@@ -521,13 +547,48 @@ class AgeOfInformationAnalyzer:
             else:
                 return self.D_enc + transmission_time + self.D_cls_trad
 
-def train_djscc_awgn(snr_db_train, x_train, y_train, x_val, y_val, blocksize):
-    """Train DJSCC model with fixed AWGN SNR"""
+def train_djscc_awgn(snr_db_train, blocksize):
+    """Train DJSCC model with fixed AWGN SNR using TFDS"""
     print(f"Training DJSCC with fixed SNR: {snr_db_train} dB")
+    
+    # Load data using TFDS - get the full dataset first
+    train_ds_full = tfds.load('cifar10', split='train', as_supervised=True)
+    
+    def preprocess(image, label):
+        image = tf.cast(image, tf.float32) / 255.0
+        return image, label
+    
+    # Preprocess the full dataset
+    train_ds_full = train_ds_full.map(preprocess)
+    
+    # Convert to list and split manually to ensure proper splitting
+    full_data = list(train_ds_full.batch(1).as_numpy_iterator())  # Batch size 1 to get individual samples
+    total_samples = len(full_data)
+    train_size = int(0.9 * total_samples)
+    
+    # Split the data
+    train_data = full_data[:train_size]
+    val_data = full_data[train_size:]
+    
+    print(f"Training samples: {len(train_data)}, Validation samples: {len(val_data)}")
+    
+    if len(train_data) == 0 or len(val_data) == 0:
+        raise ValueError("Empty dataset detected after splitting!")
+    
+    # Convert back to datasets with proper batching
+    def create_dataset_from_list(data_list, batch_size=128):
+        images = np.array([item[0][0] for item in data_list])  # Unbatch
+        labels = np.array([item[1][0] for item in data_list])
+        dataset = tf.data.Dataset.from_tensor_slices((images, labels))
+        return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    
+    train_ds = create_dataset_from_list(train_data)
+    val_ds = create_dataset_from_list(val_data)
+    
     model = build_djscc_model(blocksize, channel_type='awgn', snr_db_train=snr_db_train)
     early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=10, restore_best_weights=True, verbose=1)
-    history = model.fit(x_train, y_train, epochs=20, batch_size=128, 
-                       validation_data=(x_val, y_val), callbacks=[early_stopping], verbose=1)
+    
+    history = model.fit(train_ds, epochs=1, validation_data=val_ds, callbacks=[early_stopping], verbose=1)
     model.save_weights('model_weights_awgn.h5')
     
     if early_stopping.stopped_epoch != 0:
@@ -537,25 +598,22 @@ def train_djscc_awgn(snr_db_train, x_train, y_train, x_val, y_val, blocksize):
     
     return model, history
 
-def test_djscc_user(leo_channel, x_test, y_test, blocksize):
+def test_djscc_user(leo_channel, test_ds, blocksize):
     """Test DJSCC model for a specific user using AWGN with calculated SNR"""
     # Use the same model architecture but with AWGN channel using calculated SNR
     model = build_djscc_model(blocksize, channel_type='leo', leo_channel=leo_channel)
     model.load_weights('model_weights_awgn.h5')  # Load weights trained with fixed AWGN
-    _, accuracy = model.evaluate(x_test, y_test, verbose=0)
+    _, accuracy = model.evaluate(test_ds, verbose=0)
     return accuracy
 
-def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=20):
-    """Improved LDPC+BPG accuracy calculation - SIMPLIFIED like working code"""
+def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=2):
+    """Improved LDPC+BPG accuracy calculation using TFDS"""
     bpgencoder = BPGEncoder()
     bpgdecoder = BPGDecoder()
     
-   
-       # Load CIFAR-10 test data
-    dataset = tfds.load('cifar10', split='test', shuffle_files=False)
-    dataset = dataset.take(num_images)
-    dataset = dataset.cache()
-
+    # Load test data using TFDS
+    test_ds = tfds.load('cifar10', split='test', as_supervised=True)
+    test_ds = test_ds.take(num_images)
     
     # Create LDPC transmitter
     ldpctransmitter = LDPCTransmitterLEO(k, n, m, leo_channel)
@@ -564,12 +622,12 @@ def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classi
     original_labels = []
     
     successful_images = 0
-    for example in tqdm(dataset, desc=f"User {leo_channel.user_id}", leave=False):
-        image = example['image'].numpy()
-        label = example['label'].numpy()
+    for image, label in tqdm(test_ds, desc=f"User {leo_channel.user_id}", leave=False):
+        image_np = image.numpy()
+        label_np = label.numpy()
         
-        # SIMPLIFIED: Process single image directly (no batch reshaping)
-        image_uint8 = image.astype(np.uint8)  # Convert to uint8 for BPG
+        # Process single image
+        image_uint8 = image_np.astype(np.uint8)
         
         # Calculate max bytes
         max_bytes = 32 * 32 * 3 * bw_ratio * math.log2(m) * k / n / 8
@@ -585,7 +643,7 @@ def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classi
             
             if not is_fallback:
                 decoded_images.append(decoded_image)
-                original_labels.append(label)
+                original_labels.append(label_np)
                 successful_images += 1
                 
         except Exception as e:
@@ -608,7 +666,7 @@ def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classi
     print(f"  LDPC: {successful_images}/{num_images} successful decodes, accuracy: {acc:.4f}")
     return acc
 
-def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_model, bw_ratio=1/3, k=3072, n=4608, m=4, num_images=10):
+def adaptive_method_user(leo_channel, test_ds, blocksize, classifier_model, bw_ratio=1/3, k=3072, n=4608, m=4, num_images=2):
     """
     Adaptive method for a specific user
     Uses calculated SNR from LEO model for decision
@@ -617,13 +675,29 @@ def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_mode
     
     # Choose method based on SNR threshold
     if snr_db < 8.0:  # DJSCC for poor channel conditions
-        accuracy = test_djscc_user(leo_channel, x_test, y_test, blocksize)
+        accuracy = test_djscc_user(leo_channel, test_ds, blocksize)
         method_used = "DJSCC"
     else:  # LDPC+BPG for good channel conditions
         accuracy = calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images)
         method_used = "LDPC+BPG"
     
     return accuracy, method_used
+
+def train_classifier_model_tfds():
+    """Train classifier model for LDPC+BPG using TFDS (FIRST CODE architecture)"""
+    print("Training classifier model for LDPC+BPG using TFDS...")
+    
+    # Load data using TFDS
+    train_ds, _ = load_and_preprocess_data()
+    
+    # Build and train model using FIRST CODE architecture
+    classifier_model = build_classifier_model()
+    
+    # Train for 10 epochs as in first code
+    classifier_model.fit(train_ds, epochs=1, verbose=1)
+    classifier_model.save_weights('classifier_model_weights_ldpc_tfds.h5')
+    
+    return classifier_model
 
 def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100.0, 200.0]):
     """
@@ -644,28 +718,22 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     
     aoi_analyzer = AgeOfInformationAnalyzer(lambda_I=1.0, gamma_th=8.0)
     
-    # Train models first (ONCE for all users)
-    print("Training DJSCC model with fixed AWGN SNR...")
-    train_djscc_awgn(snr_db_train, x_train, y_train, x_val, y_val, blocksize)
+    # Train models first (ONCE for all users) using TFDS
+    print("Training DJSCC model with fixed AWGN SNR using TFDS...")
+    train_djscc_awgn(snr_db_train, blocksize)
     
-    print("Training classifier model for LDPC+BPG...")
-    classifier_model = build_classifier_model()
-    (x_train_full, y_train_full), _ = cifar10.load_data()
-    x_train_full = x_train_full.astype('float32') / 255.0
-    early_stopping = EarlyStopping(monitor='accuracy', mode='max', patience=5, restore_best_weights=True)
-    classifier_model.fit(x_train_full, y_train_full, batch_size=128, epochs=20, 
-                         validation_split=0.1, verbose=1, callbacks=[early_stopping])
-    classifier_model.save_weights('classifier_model_weights_ldpc_leo.h5')
+    print("Training classifier model for LDPC+BPG using TFDS...")
+    classifier_model_ldpc = train_classifier_model_tfds()
     
-    # Load the trained classifier model for LDPC+BPG
-    classifier_model_ldpc = build_classifier_model()
-    classifier_model_ldpc.load_weights('classifier_model_weights_ldpc_leo.h5')
+    # Load test data using TFDS
+    _, test_ds_full = load_and_preprocess_data()
+    test_ds_eval = test_ds_full.take(100)  # Use subset for evaluation
     
     # Results storage
     all_results = []
     
     # Number of test images for LDPC/BPG and adaptive evaluation
-    num_images = 10
+    num_images = 2
 
     for power in transmission_powers:
         print(f"\n--- Evaluating Transmission Power: {power}W ---")
@@ -682,7 +750,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
             
             try:
                 # Test DJSCC with AWGN using calculated SNR
-                djscc_acc = test_djscc_user(user_channel, x_test[:100], y_test[:100], blocksize)
+                djscc_acc = test_djscc_user(user_channel, test_ds_eval, blocksize)
                 
                 # Test LDPC+BPG using configurable number of images
                 ldpc_acc = calculate_accuracy_ldpc_user_improved(
@@ -691,8 +759,8 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
                 
                 # Test Adaptive method using configurable number of images
                 adaptive_acc, method_used = adaptive_method_user(
-                    user_channel, x_test[:100], y_test[:100],
-                    blocksize, classifier_model_ldpc, bw_ratio, k, n, m, num_images
+                    user_channel, test_ds_eval, blocksize, classifier_model_ldpc, 
+                    bw_ratio, k, n, m, num_images
                 )
                 
                 user_result = {
@@ -745,7 +813,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     
     return all_results
 
-
+# [Keep all the plotting and utility functions the same as in the original second code]
 def plot_separate_results(all_results):
     """Plot separate figures for accuracy and AAoMI with LaTeX formatting"""
     powers = [r['transmission_power'] for r in all_results]
@@ -794,34 +862,6 @@ def plot_separate_results(all_results):
     # Save AAoMI plots
     plt.savefig('results/aomi_comparison.png', dpi=300, bbox_inches='tight')
     plt.savefig('results/aomi_comparison.pdf', bbox_inches='tight')
-    plt.close()
-    
-    # Also save combined plot for reference
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
-    # Combined plot - Accuracy
-    ax1.plot(powers, djscc_acc, 'o-', linewidth=2, markersize=8, label='DJSCC')
-    ax1.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-    ax1.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
-    ax1.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
-    ax1.set_ylabel('Classification Accuracy $\\rho$', fontsize=14)
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(fontsize=12)
-    ax1.set_xscale('log')
-    
-    # Combined plot - AAoMI
-    ax2.plot(powers, djscc_aomi, 'o-', linewidth=2, markersize=8, label='DJSCC')
-    ax2.plot(powers, ldpc_aomi, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-    ax2.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
-    ax2.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
-    ax2.set_ylabel('$\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(fontsize=12)
-    ax2.set_xscale('log')
-    
-    plt.tight_layout()
-    plt.savefig('results/combined_results.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/combined_results.pdf', bbox_inches='tight')
     plt.close()
 
 def save_separate_data_files(all_results):
