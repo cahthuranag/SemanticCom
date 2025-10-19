@@ -280,91 +280,6 @@ def build_djscc_model(blocksize, channel_type='awgn', leo_channel=None, snr_db_t
     classifier_model.compile(optimizer='adamax', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return classifier_model
 
-class LDPCTransmitterLEO:
-    '''
-    Transmits given bits with LDPC over AWGN channel using calculated SNR from LEO model.
-    '''
-    def __init__(self, k, n, m, leo_channel):
-        '''
-        k: data bits per codeword (in LDPC)
-        n: total codeword bits (in LDPC)
-        m: modulation order (in m-QAM) - must be power of 2
-        leo_channel: LEO channel instance for the user (to get SNR)
-        '''
-        self.k = k
-        self.n = n
-        self.leo_channel = leo_channel
-        
-        # Ensure m is a power of 2 for Sionna
-        if not (m & (m - 1) == 0) and m != 0:
-            raise ValueError(f"Modulation order m must be a power of 2, got {m}")
-        
-        self.num_bits_per_symbol = int(math.log2(m))
-
-        constellation_type = 'qam' if m != 2 else 'pam'
-        self.constellation = Constellation(constellation_type, num_bits_per_symbol=self.num_bits_per_symbol)
-        self.mapper = Mapper(constellation=self.constellation)
-        self.demapper = Demapper('app', constellation=self.constellation)
-        self.encoder = LDPC5GEncoder(k=self.k, n=self.n)
-        self.decoder = LDPC5GDecoder(self.encoder, num_iter=20)
-    
-    def send(self, source_bits):
-        '''
-        source_bits: float np array of '0' and '1', whose total # of bits is divisible with k
-        '''
-        lcm = np.lcm(self.k, self.num_bits_per_symbol)
-        source_bits_pad = tf.pad(source_bits, [[0, math.ceil(len(source_bits)/lcm)*lcm - len(source_bits)]])
-        u = np.reshape(source_bits_pad, (-1, self.k))
-
-        c = self.encoder(u)
-        x = self.mapper(c)
-        
-        # Use AWGN channel with calculated SNR from LEO model
-        effective_snr = self.leo_channel.snr_db
-        no = ebnodb2no(effective_snr, num_bits_per_symbol=self.num_bits_per_symbol, coderate=self.k/self.n)
-        
-        # Apply AWGN channel
-        channel = AWGN()
-        y = channel([x, no])
-        
-        llr_ch = self.demapper([y, no])
-        u_hat = self.decoder(llr_ch)
-
-        return tf.reshape(u_hat, (-1))[:len(source_bits)]
-
-def build_classifier_model():
-    model = tf.keras.models.Sequential([
-        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(32, 32, 3)),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(64, activation='relu'),
-        tf.keras.layers.Dense(10, activation='softmax')
-    ])
-
-    model.compile(optimizer='adamax',
-                  loss='sparse_categorical_crossentropy',
-                  metrics=['accuracy'])
-
-    return model
-
-def imBatchtoImage(batch_images):
-    '''
-    turns b, 32, 32, 3 images into single sqrt(b) * 32, sqrt(b) * 32, 3 image.
-    '''
-    batch, h, w, c = batch_images.shape
-    b = int(batch ** 0.5)
-
-    divisor = b
-    while batch % divisor != 0:
-        divisor -= 1
-    
-    image = tf.reshape(batch_images, (-1, batch//divisor, h, w, c))
-    image = tf.transpose(image, [0, 2, 1, 3, 4])
-    image = tf.reshape(image, (-1, batch//divisor*w, c))
-    return image
-
 class BPGEncoder():
     def __init__(self, working_directory='./analysis/temp'):
         self.working_directory = working_directory
@@ -460,7 +375,79 @@ class BPGDecoder():
             return self.get_default_image(image_shape)
     
     def get_default_image(self, image_shape):
-        return 128 * np.ones(image_shape, dtype=np.uint8)
+        # Use CIFAR-10 mean instead of uniform 128
+        cifar_mean = np.array([0.4913997551666284, 0.48215855929893703, 0.4465309133731618]) * 255
+        cifar_mean = np.reshape(cifar_mean, [1, 1, 3]).astype(np.uint8)
+        return np.tile(cifar_mean, (image_shape[0], image_shape[1], 1))
+
+class LDPCTransmitterLEO:
+    '''
+    Transmits given bits with LDPC over AWGN channel using calculated SNR from LEO model.
+    '''
+    def __init__(self, k, n, m, leo_channel):
+        '''
+        k: data bits per codeword (in LDPC)
+        n: total codeword bits (in LDPC)
+        m: modulation order (in m-QAM) - must be power of 2
+        leo_channel: LEO channel instance for the user (to get SNR)
+        '''
+        self.k = k
+        self.n = n
+        self.leo_channel = leo_channel
+        
+        # Ensure m is a power of 2 for Sionna
+        if not (m & (m - 1) == 0) and m != 0:
+            raise ValueError(f"Modulation order m must be a power of 2, got {m}")
+        
+        self.num_bits_per_symbol = int(math.log2(m))
+
+        constellation_type = 'qam' if m != 2 else 'pam'
+        self.constellation = Constellation(constellation_type, num_bits_per_symbol=self.num_bits_per_symbol)
+        self.mapper = Mapper(constellation=self.constellation)
+        self.demapper = Demapper('app', constellation=self.constellation)
+        self.encoder = LDPC5GEncoder(k=self.k, n=self.n)
+        self.decoder = LDPC5GDecoder(self.encoder, num_iter=20)
+    
+    def send(self, source_bits):
+        '''
+        source_bits: float np array of '0' and '1', whose total # of bits is divisible with k
+        '''
+        lcm = np.lcm(self.k, self.num_bits_per_symbol)
+        source_bits_pad = tf.pad(source_bits, [[0, math.ceil(len(source_bits)/lcm)*lcm - len(source_bits)]])
+        u = np.reshape(source_bits_pad, (-1, self.k))
+
+        c = self.encoder(u)
+        x = self.mapper(c)
+        
+        # FIXED SNR CALCULATION - Use the same as your working code
+        effective_snr = self.leo_channel.snr_db
+        no = ebnodb2no(effective_snr, num_bits_per_symbol=1, coderate=1)  # CORRECTED
+        
+        # Apply AWGN channel
+        channel = AWGN()
+        y = channel([x, no])
+        
+        llr_ch = self.demapper([y, no])
+        u_hat = self.decoder(llr_ch)
+
+        return tf.reshape(u_hat, (-1))[:len(source_bits)]
+
+def build_classifier_model():
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(32, 32, 3)),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(64, activation='relu'),
+        tf.keras.layers.Dense(10, activation='softmax')
+    ])
+
+    model.compile(optimizer='adamax',
+                  loss='sparse_categorical_crossentropy',
+                  metrics=['accuracy'])
+
+    return model
 
 class AgeOfInformationAnalyzer:
     """
@@ -539,7 +526,7 @@ def train_djscc_awgn(snr_db_train, x_train, y_train, x_val, y_val, blocksize):
     print(f"Training DJSCC with fixed SNR: {snr_db_train} dB")
     model = build_djscc_model(blocksize, channel_type='awgn', snr_db_train=snr_db_train)
     early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=10, restore_best_weights=True, verbose=1)
-    history = model.fit(x_train, y_train, epochs=10, batch_size=128, 
+    history = model.fit(x_train, y_train, epochs=1, batch_size=128, 
                        validation_data=(x_val, y_val), callbacks=[early_stopping], verbose=1)
     model.save_weights('model_weights_awgn.h5')
     
@@ -558,43 +545,43 @@ def test_djscc_user(leo_channel, x_test, y_test, blocksize):
     _, accuracy = model.evaluate(x_test, y_test, verbose=0)
     return accuracy
 
-def calculate_accuracy_ldpc_user(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=10):
-    """Calculate LDPC+BPG accuracy for a specific user using calculated SNR from LEO model"""
+def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=20):
+    """Improved LDPC+BPG accuracy calculation - SIMPLIFIED like working code"""
     bpgencoder = BPGEncoder()
     bpgdecoder = BPGDecoder()
     
     dataset = tfds.load('cifar10', split='test', shuffle_files=False)
-    dataset = dataset.take(num_images).cache() 
+    dataset = dataset.take(num_images).cache()
+    
+    # Create LDPC transmitter
+    ldpctransmitter = LDPCTransmitterLEO(k, n, m, leo_channel)
+    
     decoded_images = []
     original_labels = []
     
-    # Create LDPC transmitter for this user using calculated SNR
-    try:
-        ldpctransmitter = LDPCTransmitterLEO(k, n, m, leo_channel)
-    except ValueError as e:
-        print(f"Error creating LDPC transmitter: {e}")
-        ldpctransmitter = LDPCTransmitterLEO(k, n, 4, leo_channel)  # Fallback to QPSK
-    
     successful_images = 0
-    for example in tqdm(dataset.take(num_images), desc=f"User {leo_channel.user_id}", leave=False):
+    for example in tqdm(dataset, desc=f"User {leo_channel.user_id}", leave=False):
         image = example['image'].numpy()
         label = example['label'].numpy()
-        image = image[np.newaxis, ...]
-        b, _, _, _ = image.shape
-        image_for_bpg = tf.cast(imBatchtoImage(image), tf.uint8)
         
-        # Calculate max bytes with reasonable parameters
-        max_bytes = b * 32 * 32 * 3 * bw_ratio * math.log2(m) * k / n / 8
+        # SIMPLIFIED: Process single image directly (no batch reshaping)
+        image_uint8 = image.astype(np.uint8)  # Convert to uint8 for BPG
+        
+        # Calculate max bytes
+        max_bytes = 32 * 32 * 3 * bw_ratio * math.log2(m) * k / n / 8
         
         try:
-            src_bits = bpgencoder.encode(image_for_bpg.numpy(), max_bytes)
+            src_bits = bpgencoder.encode(image_uint8, max_bytes)
             rcv_bits = ldpctransmitter.send(src_bits)
-            decoded_image = bpgdecoder.decode(rcv_bits.numpy(), image_for_bpg.shape)
+            decoded_image = bpgdecoder.decode(rcv_bits.numpy(), image_uint8.shape)
             
-            # Only use successfully decoded images (not fallback)
-            if not np.all(decoded_image == 128):
+            # Check if it's the fallback image
+            cifar_mean_uint8 = np.array([125, 123, 114])  # CIFAR mean in uint8
+            is_fallback = np.allclose(decoded_image, cifar_mean_uint8, atol=10)
+            
+            if not is_fallback:
                 decoded_images.append(decoded_image)
-                original_labels.extend([label])
+                original_labels.append(label)
                 successful_images += 1
                 
         except Exception as e:
@@ -606,14 +593,18 @@ def calculate_accuracy_ldpc_user(bw_ratio, k, n, m, leo_channel, classifier_mode
         
     decoded_images = np.array(decoded_images)
     original_labels = np.array(original_labels)
-    predictions = classifier_model.predict(decoded_images / 255.0, verbose=0)
+    
+    # Normalize properly for classifier
+    decoded_images_normalized = decoded_images.astype('float32') / 255.0
+    
+    predictions = classifier_model.predict(decoded_images_normalized, verbose=0)
     predicted_labels = np.argmax(predictions, axis=1)
     acc = np.mean(predicted_labels == original_labels)
     
     print(f"  LDPC: {successful_images}/{num_images} successful decodes, accuracy: {acc:.4f}")
     return acc
 
-def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_model, bw_ratio=0.1, k=1024, n=2048, m=4, num_images=10):
+def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_model, bw_ratio=1/3, k=3072, n=4608, m=4, num_images=20):
     """
     Adaptive method for a specific user
     Uses calculated SNR from LEO model for decision
@@ -625,7 +616,7 @@ def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_mode
         accuracy = test_djscc_user(leo_channel, x_test, y_test, blocksize)
         method_used = "DJSCC"
     else:  # LDPC+BPG for good channel conditions
-        accuracy = calculate_accuracy_ldpc_user(bw_ratio, k, n, m, leo_channel, classifier_model, num_images)
+        accuracy = calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images)
         method_used = "LDPC+BPG"
     
     return accuracy, method_used
@@ -639,11 +630,13 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     blocksize = 32
     snr_db_train = 10.0  # Fixed SNR for training
     
-    # Use reasonable parameters for LDPC+BPG
-    bw_ratio = 0.5   # 50% bandwidth
-    k = 1024          # Reasonable block size
-    n = 2048          # 1/2 code rate
-    m = 4             # QPSK
+    # USE THE SAME PARAMETERS AS YOUR WORKING CODE
+    bw_ratio = 1/3
+    k = 3072
+    n = 4608
+    m = 4
+    
+    print(f"Using proven parameters: k={k}, n={n}, Code Rate={k/n:.3f}, BW Ratio={bw_ratio}")
     
     aoi_analyzer = AgeOfInformationAnalyzer(lambda_I=1.0, gamma_th=8.0)
     
@@ -684,8 +677,8 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
                 # Test DJSCC with AWGN using calculated SNR
                 djscc_acc = test_djscc_user(user_channel, x_test[:100], y_test[:100], blocksize)
                 
-                # Test LDPC+BPG using calculated SNR
-                ldpc_acc = calculate_accuracy_ldpc_user(bw_ratio, k, n, m, user_channel, classifier_model_ldpc, 10)
+                # Test LDPC+BPG using IMPROVED function with better parameters
+                ldpc_acc = calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, user_channel, classifier_model_ldpc, 10)
                 
                 # Test Adaptive method using calculated SNR
                 adaptive_acc, method_used = adaptive_method_user(user_channel, x_test[:100], y_test[:100], 
@@ -763,7 +756,6 @@ def plot_separate_results(all_results):
     
     plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
     plt.ylabel('Classification Accuracy $\\rho$', fontsize=14)
-    #plt.title('Multi-User Average Classification Accuracy', fontsize=16)
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=12)
     plt.xscale('log')
@@ -782,7 +774,6 @@ def plot_separate_results(all_results):
     
     plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
     plt.ylabel('$\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
-    #plt.title('Multi-User Network AAoMI', fontsize=16)
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=12)
     plt.xscale('log')
@@ -802,7 +793,6 @@ def plot_separate_results(all_results):
     ax1.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
     ax1.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
     ax1.set_ylabel('Classification Accuracy $\\rho$', fontsize=14)
-    #ax1.set_title('Multi-User Average Classification Accuracy', fontsize=16)
     ax1.grid(True, alpha=0.3)
     ax1.legend(fontsize=12)
     ax1.set_xscale('log')
@@ -813,7 +803,6 @@ def plot_separate_results(all_results):
     ax2.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
     ax2.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
     ax2.set_ylabel('$\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
-    #ax2.set_title('Multi-User Network AAoMI', fontsize=16)
     ax2.grid(True, alpha=0.3)
     ax2.legend(fontsize=12)
     ax2.set_xscale('log')
