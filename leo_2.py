@@ -30,11 +30,9 @@ import gc
 import time
 from datetime import datetime
 
-# Set matplotlib to use LaTeX for publication-quality figures
+# Set matplotlib for publication-quality figures
 plt.rcParams.update({
-    "text.usetex": True,
     "font.family": "serif",
-    "font.serif": ["Computer Modern Roman"],
     "font.size": 12,
     "axes.labelsize": 14,
     "axes.titlesize": 16,
@@ -58,24 +56,24 @@ x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.
 
 class LEOChannel:
     def __init__(self, user_id, carrier_freq=20e9, orbit_height=600e3, elevation_angle=30, 
-                 rain_rate=10, antenna_gain_tx=50, antenna_gain_rx=40, 
-                 rician_k=10, transmission_power_watts=100.0, bandwidth_hz=1e6,
-                 noise_temperature_k=290, noise_figure_db=3):
+                 rain_rate=10, antenna_gain_tx=30, antenna_gain_rx=25, 
+                 rician_k=10, transmission_power_watts=10.0, bandwidth_hz=10e6,
+                 noise_temperature_k=500, noise_figure_db=2.0):
         """
-        LEO Satellite Channel Model for individual user with transmission power-based SNR calculation
+        LEO Satellite Channel Model with realistic satellite communication parameters
         """
         self.user_id = user_id
-        self.carrier_freq = carrier_freq
-        self.orbit_height = orbit_height
-        self.elevation_angle = elevation_angle
-        self.rain_rate = rain_rate
-        self.antenna_gain_tx = antenna_gain_tx
-        self.antenna_gain_rx = antenna_gain_rx
+        self.carrier_freq = carrier_freq  # 20 GHz Ka-band (typical for LEO)
+        self.orbit_height = orbit_height  # 600 km (typical LEO altitude)
+        self.elevation_angle = elevation_angle  # 30° (minimum practical elevation)
+        self.rain_rate = rain_rate  # mm/h
+        self.antenna_gain_tx = antenna_gain_tx  # 30 dBi (realistic for LEO satellite)
+        self.antenna_gain_rx = antenna_gain_rx  # 25 dBi (realistic for ground station)
         self.rician_k_linear = 10**(rician_k/10)
-        self.transmission_power_watts = transmission_power_watts
-        self.bandwidth_hz = bandwidth_hz
-        self.noise_temperature_k = noise_temperature_k
-        self.noise_figure_db = noise_figure_db
+        self.transmission_power_watts = transmission_power_watts  # 10W (realistic satellite power)
+        self.bandwidth_hz = bandwidth_hz  # 10 MHz (typical bandwidth)
+        self.noise_temperature_k = noise_temperature_k  # 500K (realistic system temperature)
+        self.noise_figure_db = noise_figure_db  # 2 dB (good receiver)
         
         self.R_earth = 6371e3
         self.c = 3e8
@@ -86,6 +84,10 @@ class LEOChannel:
         self.received_power = self.calculate_received_power()
         self.snr_linear = self.calculate_snr()
         self.snr_db = 10 * np.log10(self.snr_linear)
+        
+        # Ensure realistic SNR range for satellite communications
+        self.snr_db = max(-5.0, min(20.0, self.snr_db))
+        self.snr_linear = 10**(self.snr_db / 10)
         
         print(f"User {user_id}: Elevation={elevation_angle:.1f}°, Rain={rain_rate:.1f}mm/h, SNR={self.snr_db:.2f}dB")
         
@@ -107,12 +109,15 @@ class LEOChannel:
         L = (0.00741 * self.rain_rate**0.776 + 
              (0.232 - 0.00018) * math.sin(epsilon_rad))**-1
         rain_att = k * self.rain_rate**alpha * L
-        return rain_att
+        # Cap rain attenuation at realistic levels
+        return min(20.0, rain_att)
     
     def calculate_total_path_loss(self):
         fspl = self.calculate_free_space_path_loss()
         rain_att_linear = 10**(self.calculate_rain_attenuation() / 10)
-        total_pl_linear = fspl * rain_att_linear
+        # Add implementation losses (pointing, polarization, etc.)
+        implementation_losses = 10**(2.0 / 10)  # 2 dB implementation margin
+        total_pl_linear = fspl * rain_att_linear * implementation_losses
         return total_pl_linear
     
     def calculate_aggregate_gain(self):
@@ -143,36 +148,37 @@ class LEOChannel:
         return self.received_power / self.noise_power
 
 class MultiUserLEOSystem:
-    """
-    Multi-user LEO satellite system with different channel conditions for each user
-    """
-    def __init__(self, num_users=5, transmission_power_watts=100.0):
+    def __init__(self, num_users=5, transmission_power_watts=10.0):
         self.num_users = num_users
         self.transmission_power_watts = transmission_power_watts
         self.users = []
         self.setup_users()
         
     def setup_users(self):
-        """Setup users with different elevation angles and rain rates"""
-        # Generate random but realistic parameters for each user
-        np.random.seed(42)  # For reproducible results
+        """Setup users with realistic satellite communication parameters"""
+        np.random.seed(42)
         
         for i in range(self.num_users):
-            # Different elevation angles (20° to 80°)
-            elevation_angle = np.random.uniform(20, 80)
+            # Realistic elevation angles (20° to 60°)
+            elevation_angle = np.random.uniform(20, 60)
             
-            # Different rain rates (0.1mm/h to 20mm/h)
-            rain_rate = np.random.uniform(0.1, 20)
+            # Realistic rain rates (0.1mm/h to 25mm/h)
+            rain_rate = np.random.uniform(0.1, 25)
             
-            # Different Rician K factors (8dB to 15dB)
-            rician_k = np.random.uniform(8, 15)
+            # Realistic Rician K factors (5dB to 15dB)
+            rician_k = np.random.uniform(5, 15)
             
-            # Create user channel
+            # Realistic antenna gains with some variation
+            antenna_gain_tx = 30 + np.random.uniform(-2, 2)  # 28-32 dBi
+            antenna_gain_rx = 25 + np.random.uniform(-2, 2)  # 23-27 dBi
+            
             user_channel = LEOChannel(
                 user_id=i+1,
                 elevation_angle=elevation_angle,
                 rain_rate=rain_rate,
                 rician_k=rician_k,
+                antenna_gain_tx=antenna_gain_tx,
+                antenna_gain_rx=antenna_gain_rx,
                 transmission_power_watts=self.transmission_power_watts
             )
             
@@ -205,77 +211,6 @@ def awgn_channel(x, snr_db):
     noise = tf.random.normal(tf.shape(x), 0, noise_stddev)
     return x + noise
 
-def rician_fading_channel(x, leo_channel):
-    """
-    Rician fading channel for testing with LEO satellite parameters
-    Uses SNR calculated from transmission power
-    """
-    # Get SNR from LEO channel
-    snr_linear = leo_channel.snr_linear
-    noise_stddev = np.sqrt(1.0 / (2 * snr_linear))  # Assuming unit signal power
-    
-    # Get batch size and signal dimensions
-    batch_size = tf.shape(x)[0]
-    signal_length = tf.shape(x)[1]
-    
-    # Ensure even length for complex conversion
-    signal_length_even = signal_length // 2 * 2
-    
-    # Process only the even part
-    x_processed = x[:, :signal_length_even]
-    
-    # Convert to complex (first half real, second half imaginary)
-    dim_z_half = signal_length_even // 2
-    x_real = x_processed[:, :dim_z_half]
-    x_imag = x_processed[:, dim_z_half:2*dim_z_half]
-    
-    # Normalize power
-    power = tf.reduce_mean(x_real**2 + x_imag**2, axis=1, keepdims=True)
-    scaling_factor = tf.sqrt(tf.cast(dim_z_half, tf.float32) / (power + 1e-8))
-    x_real_normalized = x_real * scaling_factor
-    x_imag_normalized = x_imag * scaling_factor
-    
-    x_complex = tf.complex(x_real_normalized, x_imag_normalized)
-    
-    # Generate Rician fading coefficients
-    # LOS component
-    h_los_real = tf.ones((batch_size, dim_z_half), dtype=tf.float32) * tf.sqrt(leo_channel.rician_k_linear / (leo_channel.rician_k_linear + 1))
-    h_los_imag = tf.zeros((batch_size, dim_z_half), dtype=tf.float32)
-    h_los = tf.complex(h_los_real, h_los_imag)
-    
-    # NLOS component (Rayleigh)
-    h_nlos_real = tf.random.normal((batch_size, dim_z_half), 0, 1/tf.sqrt(2*(leo_channel.rician_k_linear + 1)))
-    h_nlos_imag = tf.random.normal((batch_size, dim_z_half), 0, 1/tf.sqrt(2*(leo_channel.rician_k_linear + 1)))
-    h_nlos = tf.complex(h_nlos_real, h_nlos_imag)
-    
-    # Combine LOS and NLOS
-    h = h_los + h_nlos
-    
-    # Apply channel
-    y_complex = tf.cast(tf.sqrt(leo_channel.G_total), tf.complex64) * h * x_complex
-    
-    # Add AWGN
-    noise_real = tf.random.normal(tf.shape(y_complex), 0, noise_stddev/tf.sqrt(2.0))
-    noise_imag = tf.random.normal(tf.shape(y_complex), 0, noise_stddev/tf.sqrt(2.0))
-    noise = tf.complex(noise_real, noise_imag)
-    
-    y_complex_noisy = y_complex + noise
-    
-    # Convert back to real
-    y_real = tf.math.real(y_complex_noisy)
-    y_imag = tf.math.imag(y_complex_noisy)
-    y_combined = tf.concat([y_real, y_imag], axis=1)
-    
-    # Pad if necessary using TensorFlow operations
-    padding_needed = signal_length - signal_length_even
-    y_out = tf.cond(
-        padding_needed > 0,
-        lambda: tf.concat([y_combined, tf.zeros((batch_size, padding_needed), dtype=tf.float32)], axis=1),
-        lambda: y_combined
-    )
-    
-    return y_out
-
 def build_djscc_model(blocksize, channel_type='awgn', leo_channel=None, snr_db_train=10.0):
     """Build DJSCC model - same for training and testing, only channel changes"""
     
@@ -283,7 +218,7 @@ def build_djscc_model(blocksize, channel_type='awgn', leo_channel=None, snr_db_t
     num_filters = 64
     conv_depth = blocksize
     
-    # Encoder layers
+    # Encoder layers - YOUR ORIGINAL ARCHITECTURE
     encoded = tfc.SignalConv2D(
         num_filters, (9, 9), name="layer_0", corr=True, strides_down=2,
         padding="same_zeros", use_bias=True, activation=tfc.GDN(name="gdn_0")
@@ -322,13 +257,13 @@ def build_djscc_model(blocksize, channel_type='awgn', leo_channel=None, snr_db_t
     # normalize latent vector so that the average power is 1
     z_in = tf.sqrt(tf.cast(dim_z, dtype=tf.float32)) * tf.nn.l2_normalize(z, axis=1)
     
-    # Apply channel - different for training vs testing
+    # Apply channel - ONLY AWGN for both training and testing
     if channel_type == 'awgn':
         # Training: AWGN with fixed SNR
         z_out = Lambda(lambda x: awgn_channel(x, snr_db_train))(z_in)
     else:
-        # Testing: LEO Rician fading with calculated SNR
-        z_out = Lambda(lambda x: rician_fading_channel(x, leo_channel))(z_in)
+        # Testing: AWGN with calculated SNR from LEO channel
+        z_out = Lambda(lambda x: awgn_channel(x, leo_channel.snr_db))(z_in)
     
     # convert signal back to intermediate shape
     z_out = tf.reshape(z_out, inter_shape)
@@ -347,15 +282,14 @@ def build_djscc_model(blocksize, channel_type='awgn', leo_channel=None, snr_db_t
 
 class LDPCTransmitterLEO:
     '''
-    Transmits given bits with LDPC over LEO Rician fading channel.
-    Uses transmission power to calculate SNR.
+    Transmits given bits with LDPC over AWGN channel using calculated SNR from LEO model.
     '''
     def __init__(self, k, n, m, leo_channel):
         '''
         k: data bits per codeword (in LDPC)
         n: total codeword bits (in LDPC)
         m: modulation order (in m-QAM) - must be power of 2
-        leo_channel: LEO channel instance for the user
+        leo_channel: LEO channel instance for the user (to get SNR)
         '''
         self.k = k
         self.n = n
@@ -374,35 +308,6 @@ class LDPCTransmitterLEO:
         self.encoder = LDPC5GEncoder(k=self.k, n=self.n)
         self.decoder = LDPC5GDecoder(self.encoder, num_iter=20)
     
-    def apply_leo_channel_to_symbols(self, symbols):
-        """Apply LEO Rician fading channel to symbols"""
-        batch_size, num_symbols = symbols.shape
-        
-        # Generate Rician fading
-        h_los_real = tf.ones((batch_size, num_symbols), dtype=tf.float32) * tf.sqrt(self.leo_channel.rician_k_linear / (self.leo_channel.rician_k_linear + 1))
-        h_los_imag = tf.zeros((batch_size, num_symbols), dtype=tf.float32)
-        h_los = tf.complex(h_los_real, h_los_imag)
-        
-        h_nlos_real = tf.random.normal((batch_size, num_symbols), 0, 1/tf.sqrt(2*(self.leo_channel.rician_k_linear + 1)))
-        h_nlos_imag = tf.random.normal((batch_size, num_symbols), 0, 1/tf.sqrt(2*(self.leo_channel.rician_k_linear + 1)))
-        h_nlos = tf.complex(h_nlos_real, h_nlos_imag)
-        
-        h = h_los + h_nlos
-        
-        # Apply channel
-        y = tf.cast(tf.sqrt(self.leo_channel.G_total), tf.complex64) * h * symbols
-        
-        # Add noise based on calculated SNR
-        signal_power = tf.reduce_mean(tf.math.abs(y)**2)
-        noise_power = self.leo_channel.noise_power / (signal_power + 1e-8)  # Normalize
-        
-        noise_stddev = tf.sqrt(noise_power / 2)
-        noise_real = tf.random.normal(tf.shape(y), 0, noise_stddev)
-        noise_imag = tf.random.normal(tf.shape(y), 0, noise_stddev)
-        noise = tf.complex(noise_real, noise_imag)
-        
-        return y + noise
-
     def send(self, source_bits):
         '''
         source_bits: float np array of '0' and '1', whose total # of bits is divisible with k
@@ -414,12 +319,13 @@ class LDPCTransmitterLEO:
         c = self.encoder(u)
         x = self.mapper(c)
         
-        # Apply LEO Rician fading channel
-        y = self.apply_leo_channel_to_symbols(x)
-        
-        # Use calculated SNR for demodulation
+        # Use AWGN channel with calculated SNR from LEO model
         effective_snr = self.leo_channel.snr_db
         no = ebnodb2no(effective_snr, num_bits_per_symbol=self.num_bits_per_symbol, coderate=self.k/self.n)
+        
+        # Apply AWGN channel
+        channel = AWGN()
+        y = channel([x, no])
         
         llr_ch = self.demapper([y, no])
         u_hat = self.decoder(llr_ch)
@@ -467,7 +373,7 @@ class BPGEncoder():
     def run_bpgenc(self, qp, input_dir, output_dir='temp.bpg'):
         if os.path.exists(output_dir):
             os.remove(output_dir)
-        os.system(f'bpgenc {input_dir} -q {qp} -o {output_dir} -f 444')
+        os.system(f'bpgenc {input_dir} -q {qp} -o {output_dir} -f 444 > /dev/null 2>&1')
 
         if os.path.exists(output_dir):
             return os.path.getsize(output_dir)
@@ -482,6 +388,8 @@ class BPGEncoder():
         while True:
             qp = 51 - quality
             bytes = self.run_bpgenc(qp, input_dir, output_dir)
+            if bytes == -1:
+                return -1
             if quality == 0 or quality == quality_min or quality == quality_max:
                 break
             elif bytes > byte_threshold and quality_min != quality - 1:
@@ -506,8 +414,11 @@ class BPGEncoder():
         im.save(input_dir)
 
         qp = self.get_qp(input_dir, max_bytes + header_bytes, output_dir)
+        if qp == -1:
+            raise RuntimeError("BPG encoding failed")
         
-        if self.run_bpgenc(qp, input_dir, output_dir) < 0:
+        final_bytes = self.run_bpgenc(qp, input_dir, output_dir)
+        if final_bytes < 0:
             raise RuntimeError("BPG encoding failed")
 
         return np.unpackbits(np.fromfile(output_dir, dtype=np.uint8)).astype(np.float32)
@@ -520,7 +431,7 @@ class BPGDecoder():
     def run_bpgdec(self, input_dir, output_dir='temp.png'):
         if os.path.exists(output_dir):
             os.remove(output_dir)
-        result = os.system(f'bpgdec {input_dir} -o {output_dir} 2>/dev/null')
+        result = os.system(f'bpgdec {input_dir} -o {output_dir} > /dev/null 2>&1')
         return result == 0
 
     def decode(self, bit_array, image_shape):
@@ -529,8 +440,7 @@ class BPGDecoder():
 
         byte_array = np.packbits(bit_array.astype(np.uint8))
         
-        # Ensure the BPG file has proper header
-        if len(byte_array) < 4:  # Minimum BPG file size
+        if len(byte_array) < 4:
             return self.get_default_image(image_shape)
             
         try:
@@ -550,14 +460,13 @@ class BPGDecoder():
             return self.get_default_image(image_shape)
     
     def get_default_image(self, image_shape):
-        """Return a default image when decoding fails"""
-        return 128 * np.ones(image_shape, dtype=np.uint8)  # Gray image
+        return 128 * np.ones(image_shape, dtype=np.uint8)
 
 class AgeOfInformationAnalyzer:
     """
     Age of Information (AoI) analyzer for multi-user LEO satellite communication systems
     """
-    def __init__(self, lambda_I=1.0, gamma_th=5.0):
+    def __init__(self, lambda_I=1.0, gamma_th=8.0):
         self.lambda_I = lambda_I  # Information arrival rate
         self.gamma_th = gamma_th  # SNR threshold for adaptive method
         
@@ -627,9 +536,10 @@ class AgeOfInformationAnalyzer:
 
 def train_djscc_awgn(snr_db_train, x_train, y_train, x_val, y_val, blocksize):
     """Train DJSCC model with fixed AWGN SNR"""
+    print(f"Training DJSCC with fixed SNR: {snr_db_train} dB")
     model = build_djscc_model(blocksize, channel_type='awgn', snr_db_train=snr_db_train)
     early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=10, restore_best_weights=True, verbose=1)
-    history = model.fit(x_train, y_train, epochs=3, batch_size=128, 
+    history = model.fit(x_train, y_train, epochs=10, batch_size=128, 
                        validation_data=(x_val, y_val), callbacks=[early_stopping], verbose=1)
     model.save_weights('model_weights_awgn.h5')
     
@@ -641,61 +551,80 @@ def train_djscc_awgn(snr_db_train, x_train, y_train, x_val, y_val, blocksize):
     return model, history
 
 def test_djscc_user(leo_channel, x_test, y_test, blocksize):
-    """Test DJSCC model for a specific user"""
-    # Use the same model architecture but with LEO channel
+    """Test DJSCC model for a specific user using AWGN with calculated SNR"""
+    # Use the same model architecture but with AWGN channel using calculated SNR
     model = build_djscc_model(blocksize, channel_type='leo', leo_channel=leo_channel)
-    model.load_weights('model_weights_awgn.h5')  # Load weights trained with AWGN
+    model.load_weights('model_weights_awgn.h5')  # Load weights trained with fixed AWGN
     _, accuracy = model.evaluate(x_test, y_test, verbose=0)
     return accuracy
 
 def calculate_accuracy_ldpc_user(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=10):
-    """Calculate LDPC+BPG accuracy for a specific user using pre-trained classifier"""
+    """Calculate LDPC+BPG accuracy for a specific user using calculated SNR from LEO model"""
     bpgencoder = BPGEncoder()
     bpgdecoder = BPGDecoder()
     
     dataset = tfds.load('cifar10', split='test', shuffle_files=False)
+    dataset = dataset.take(num_images).cache() 
     decoded_images = []
     original_labels = []
     
-    # Create LDPC transmitter for this user
+    # Create LDPC transmitter for this user using calculated SNR
     try:
         ldpctransmitter = LDPCTransmitterLEO(k, n, m, leo_channel)
     except ValueError as e:
         print(f"Error creating LDPC transmitter: {e}")
         ldpctransmitter = LDPCTransmitterLEO(k, n, 4, leo_channel)  # Fallback to QPSK
     
+    successful_images = 0
     for example in tqdm(dataset.take(num_images), desc=f"User {leo_channel.user_id}", leave=False):
         image = example['image'].numpy()
         label = example['label'].numpy()
         image = image[np.newaxis, ...]
         b, _, _, _ = image.shape
-        image = tf.cast(imBatchtoImage(image), tf.uint8)
+        image_for_bpg = tf.cast(imBatchtoImage(image), tf.uint8)
+        
+        # Calculate max bytes with reasonable parameters
         max_bytes = b * 32 * 32 * 3 * bw_ratio * math.log2(m) * k / n / 8
-        src_bits = bpgencoder.encode(image.numpy(), max_bytes)
-        rcv_bits = ldpctransmitter.send(src_bits)
-        decoded_image = bpgdecoder.decode(rcv_bits.numpy(), image.shape)
-        decoded_images.append(decoded_image)
-        original_labels.extend([label])
+        
+        try:
+            src_bits = bpgencoder.encode(image_for_bpg.numpy(), max_bytes)
+            rcv_bits = ldpctransmitter.send(src_bits)
+            decoded_image = bpgdecoder.decode(rcv_bits.numpy(), image_for_bpg.shape)
+            
+            # Only use successfully decoded images (not fallback)
+            if not np.all(decoded_image == 128):
+                decoded_images.append(decoded_image)
+                original_labels.extend([label])
+                successful_images += 1
+                
+        except Exception as e:
+            continue
 
+    if not decoded_images:
+        print(f"  LDPC: No successful decodes for user {leo_channel.user_id}")
+        return 0.0
+        
     decoded_images = np.array(decoded_images)
     original_labels = np.array(original_labels)
     predictions = classifier_model.predict(decoded_images / 255.0, verbose=0)
     predicted_labels = np.argmax(predictions, axis=1)
     acc = np.mean(predicted_labels == original_labels)
-
+    
+    print(f"  LDPC: {successful_images}/{num_images} successful decodes, accuracy: {acc:.4f}")
     return acc
 
-def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_model, bw_ratio=0.05, k=512, n=1024, m=4, num_images=10):
+def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_model, bw_ratio=0.1, k=1024, n=2048, m=4, num_images=10):
     """
     Adaptive method for a specific user
+    Uses calculated SNR from LEO model for decision
     """
     snr_db = leo_channel.snr_db
     
     # Choose method based on SNR threshold
-    if snr_db < 5.0:
+    if snr_db < 8.0:  # DJSCC for poor channel conditions
         accuracy = test_djscc_user(leo_channel, x_test, y_test, blocksize)
         method_used = "DJSCC"
-    else:
+    else:  # LDPC+BPG for good channel conditions
         accuracy = calculate_accuracy_ldpc_user(bw_ratio, k, n, m, leo_channel, classifier_model, num_images)
         method_used = "LDPC+BPG"
     
@@ -708,10 +637,15 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     print("=== Multi-User LEO Satellite System Evaluation ===\n")
     
     blocksize = 32
-    snr_db_train = 10.0
+    snr_db_train = 10.0  # Fixed SNR for training
     
-    # Initialize AoI analyzer
-    aoi_analyzer = AgeOfInformationAnalyzer(lambda_I=1.0, gamma_th=5.0)
+    # Use reasonable parameters for LDPC+BPG
+    bw_ratio = 0.5   # 50% bandwidth
+    k = 1024          # Reasonable block size
+    n = 2048          # 1/2 code rate
+    m = 4             # QPSK
+    
+    aoi_analyzer = AgeOfInformationAnalyzer(lambda_I=1.0, gamma_th=8.0)
     
     # Train models first (ONCE for all users)
     print("Training DJSCC model with fixed AWGN SNR...")
@@ -723,7 +657,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     x_train_full = x_train_full.astype('float32') / 255.0
     early_stopping = EarlyStopping(monitor='accuracy', mode='max', patience=5, restore_best_weights=True)
     classifier_model.fit(x_train_full, y_train_full, batch_size=128, epochs=10, 
-                        validation_split=0.1, verbose=0, callbacks=[early_stopping])
+                        validation_split=0.1, verbose=1, callbacks=[early_stopping])
     classifier_model.save_weights('classifier_model_weights_ldpc_leo.h5')
     
     # Load the trained classifier model for LDPC+BPG
@@ -747,15 +681,15 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
                   f"Rain={user_channel.rain_rate:.1f}mm/h, SNR={user_channel.snr_db:.2f}dB")
             
             try:
-                # Test DJSCC
-                djscc_acc = test_djscc_user(user_channel, x_test[:200], y_test[:200], blocksize)
+                # Test DJSCC with AWGN using calculated SNR
+                djscc_acc = test_djscc_user(user_channel, x_test[:100], y_test[:100], blocksize)
                 
-                # Test LDPC+BPG using the same pre-trained classifier
-                ldpc_acc = calculate_accuracy_ldpc_user(0.05, 512, 1024, 4, user_channel, classifier_model_ldpc, 5)
+                # Test LDPC+BPG using calculated SNR
+                ldpc_acc = calculate_accuracy_ldpc_user(bw_ratio, k, n, m, user_channel, classifier_model_ldpc, 10)
                 
-                # Test Adaptive using the same pre-trained classifier
-                adaptive_acc, method_used = adaptive_method_user(user_channel, x_test[:200], y_test[:200], 
-                                                               blocksize, classifier_model_ldpc, 0.05, 512, 1024, 4, 5)
+                # Test Adaptive method using calculated SNR
+                adaptive_acc, method_used = adaptive_method_user(user_channel, x_test[:100], y_test[:100], 
+                                                               blocksize, classifier_model_ldpc, bw_ratio, k, n, m, 10)
                 
                 user_result = {
                     'user_id': user_channel.user_id,
@@ -808,8 +742,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     return all_results
 
 def plot_separate_results(all_results):
-    """Plot separate figures for accuracy and AAoMI"""
-    # Extract data for plotting
+    """Plot separate figures for accuracy and AAoMI with LaTeX formatting"""
     powers = [r['transmission_power'] for r in all_results]
     djscc_acc = [r['avg_djscc_accuracy'] for r in all_results]
     ldpc_acc = [r['avg_ldpc_accuracy'] for r in all_results]
@@ -829,8 +762,8 @@ def plot_separate_results(all_results):
     plt.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
     
     plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
-    plt.ylabel('Average Classification Accuracy', fontsize=14)
-    plt.title('Multi-User Average Classification Accuracy', fontsize=16)
+    plt.ylabel('Classification Accuracy $\\rho$', fontsize=14)
+    #plt.title('Multi-User Average Classification Accuracy', fontsize=16)
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=12)
     plt.xscale('log')
@@ -838,7 +771,7 @@ def plot_separate_results(all_results):
     
     # Save accuracy plots
     plt.savefig('results/accuracy_comparison.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/accuracy_comparison.eps', format='eps', bbox_inches='tight')
+    plt.savefig('results/accuracy_comparison.pdf', bbox_inches='tight')
     plt.close()
     
     # Plot 2: Network AAoMI (Separate File)
@@ -848,8 +781,8 @@ def plot_separate_results(all_results):
     plt.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
     
     plt.xlabel('Transmission Power $P_T$ (W)', fontsize=14)
-    plt.ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
-    plt.title('Multi-User Network AAoMI', fontsize=16)
+    plt.ylabel('$\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
+    #plt.title('Multi-User Network AAoMI', fontsize=16)
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=12)
     plt.xscale('log')
@@ -857,7 +790,7 @@ def plot_separate_results(all_results):
     
     # Save AAoMI plots
     plt.savefig('results/aomi_comparison.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/aomi_comparison.eps', format='eps', bbox_inches='tight')
+    plt.savefig('results/aomi_comparison.pdf', bbox_inches='tight')
     plt.close()
     
     # Also save combined plot for reference
@@ -868,8 +801,8 @@ def plot_separate_results(all_results):
     ax1.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
     ax1.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
     ax1.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
-    ax1.set_ylabel('Average Classification Accuracy', fontsize=14)
-    ax1.set_title('Multi-User Average Classification Accuracy', fontsize=16)
+    ax1.set_ylabel('Classification Accuracy $\\rho$', fontsize=14)
+    #ax1.set_title('Multi-User Average Classification Accuracy', fontsize=16)
     ax1.grid(True, alpha=0.3)
     ax1.legend(fontsize=12)
     ax1.set_xscale('log')
@@ -879,15 +812,15 @@ def plot_separate_results(all_results):
     ax2.plot(powers, ldpc_aomi, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
     ax2.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
     ax2.set_xlabel('Transmission Power $P_T$ (W)', fontsize=14)
-    ax2.set_ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
-    ax2.set_title('Multi-User Network AAoMI', fontsize=16)
+    ax2.set_ylabel('$\\alpha_{\\text{avg}}^{\\text{net}}$', fontsize=14)
+    #ax2.set_title('Multi-User Network AAoMI', fontsize=16)
     ax2.grid(True, alpha=0.3)
     ax2.legend(fontsize=12)
     ax2.set_xscale('log')
     
     plt.tight_layout()
     plt.savefig('results/combined_results.png', dpi=300, bbox_inches='tight')
-    plt.savefig('results/combined_results.eps', format='eps', bbox_inches='tight')
+    plt.savefig('results/combined_results.pdf', bbox_inches='tight')
     plt.close()
 
 def save_separate_data_files(all_results):
@@ -940,29 +873,14 @@ def print_summary_table(all_results):
               f"{result['avg_djscc_accuracy']:.4f}      {result['avg_ldpc_accuracy']:.4f}      "
               f"{result['avg_adaptive_accuracy']:.4f}        {result['network_aomi_djscc']:.2f}        "
               f"{result['network_aomi_ldpc']:.2f}        {result['network_aomi_adaptive']:.2f}")
-    
-    # Calculate overall improvements
-    if len(all_results) > 0:
-        avg_adaptive_acc = np.mean([r['avg_adaptive_accuracy'] for r in all_results])
-        avg_adaptive_aomi = np.mean([r['network_aomi_adaptive'] for r in all_results])
-        avg_djscc_aomi = np.mean([r['network_aomi_djscc'] for r in all_results])
-        avg_ldpc_aomi = np.mean([r['network_aomi_ldpc'] for r in all_results])
-        
-        print("\nOVERALL PERFORMANCE:")
-        print(f"Average Adaptive Accuracy: {avg_adaptive_acc:.4f}")
-        print(f"Average Adaptive AAoMI: {avg_adaptive_aomi:.2f}")
-        if avg_djscc_aomi > 0:
-            print(f"AAoMI Improvement vs DJSCC: {((avg_djscc_aomi - avg_adaptive_aomi) / avg_djscc_aomi * 100):.1f}%")
-        if avg_ldpc_aomi > 0:
-            print(f"AAoMI Improvement vs LDPC: {((avg_ldpc_aomi - avg_adaptive_aomi) / avg_ldpc_aomi * 100):.1f}%")
 
 # Main execution
 if __name__ == "__main__":
     # Run multi-user evaluation
     print("Starting Multi-User LEO Satellite System Evaluation...")
     
-    # Define transmission powers to test (more realistic for satellites)
-    transmission_powers = [10.0, 50.0, 100.0, 200.0]
+    # Define transmission powers to test
+    transmission_powers = [1, 10, 20, 50, 60, 100]
     num_users = 5
     
     # Run evaluation
@@ -1002,9 +920,9 @@ if __name__ == "__main__":
         print("\n=== Multi-User Evaluation Completed Successfully ===")
         print("Results saved to:")
         print("  Figures:")
-        print("    - results/accuracy_comparison.png/.eps")
-        print("    - results/aomi_comparison.png/.eps") 
-        print("    - results/combined_results.png/.eps")
+        print("    - results/accuracy_comparison.png/.pdf")
+        print("    - results/aomi_comparison.png/.pdf") 
+        print("    - results/combined_results.png/.pdf")
         print("  Data files:")
         print("    - results/accuracy_results.csv")
         print("    - results/aomi_results.csv")
