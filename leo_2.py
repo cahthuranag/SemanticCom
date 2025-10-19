@@ -526,7 +526,7 @@ def train_djscc_awgn(snr_db_train, x_train, y_train, x_val, y_val, blocksize):
     print(f"Training DJSCC with fixed SNR: {snr_db_train} dB")
     model = build_djscc_model(blocksize, channel_type='awgn', snr_db_train=snr_db_train)
     early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=10, restore_best_weights=True, verbose=1)
-    history = model.fit(x_train, y_train, epochs=1, batch_size=128, 
+    history = model.fit(x_train, y_train, epochs=20, batch_size=128, 
                        validation_data=(x_val, y_val), callbacks=[early_stopping], verbose=1)
     model.save_weights('model_weights_awgn.h5')
     
@@ -550,8 +550,12 @@ def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classi
     bpgencoder = BPGEncoder()
     bpgdecoder = BPGDecoder()
     
+   
+       # Load CIFAR-10 test data
     dataset = tfds.load('cifar10', split='test', shuffle_files=False)
-    dataset = dataset.take(num_images).cache()
+    dataset = dataset.take(num_images)
+    dataset = dataset.cache()
+
     
     # Create LDPC transmitter
     ldpctransmitter = LDPCTransmitterLEO(k, n, m, leo_channel)
@@ -604,7 +608,7 @@ def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classi
     print(f"  LDPC: {successful_images}/{num_images} successful decodes, accuracy: {acc:.4f}")
     return acc
 
-def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_model, bw_ratio=1/3, k=3072, n=4608, m=4, num_images=20):
+def adaptive_method_user(leo_channel, x_test, y_test, blocksize, classifier_model, bw_ratio=1/3, k=3072, n=4608, m=4, num_images=10):
     """
     Adaptive method for a specific user
     Uses calculated SNR from LEO model for decision
@@ -630,7 +634,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     blocksize = 32
     snr_db_train = 10.0  # Fixed SNR for training
     
-    # USE THE SAME PARAMETERS AS YOUR WORKING CODE
+    # Proven parameters
     bw_ratio = 1/3
     k = 3072
     n = 4608
@@ -649,8 +653,8 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     (x_train_full, y_train_full), _ = cifar10.load_data()
     x_train_full = x_train_full.astype('float32') / 255.0
     early_stopping = EarlyStopping(monitor='accuracy', mode='max', patience=5, restore_best_weights=True)
-    classifier_model.fit(x_train_full, y_train_full, batch_size=128, epochs=10, 
-                        validation_split=0.1, verbose=1, callbacks=[early_stopping])
+    classifier_model.fit(x_train_full, y_train_full, batch_size=128, epochs=20, 
+                         validation_split=0.1, verbose=1, callbacks=[early_stopping])
     classifier_model.save_weights('classifier_model_weights_ldpc_leo.h5')
     
     # Load the trained classifier model for LDPC+BPG
@@ -660,6 +664,9 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     # Results storage
     all_results = []
     
+    # Number of test images for LDPC/BPG and adaptive evaluation
+    num_images = 10
+
     for power in transmission_powers:
         print(f"\n--- Evaluating Transmission Power: {power}W ---")
         
@@ -677,12 +684,16 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
                 # Test DJSCC with AWGN using calculated SNR
                 djscc_acc = test_djscc_user(user_channel, x_test[:100], y_test[:100], blocksize)
                 
-                # Test LDPC+BPG using IMPROVED function with better parameters
-                ldpc_acc = calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, user_channel, classifier_model_ldpc, 10)
+                # Test LDPC+BPG using configurable number of images
+                ldpc_acc = calculate_accuracy_ldpc_user_improved(
+                    bw_ratio, k, n, m, user_channel, classifier_model_ldpc, num_images
+                )
                 
-                # Test Adaptive method using calculated SNR
-                adaptive_acc, method_used = adaptive_method_user(user_channel, x_test[:100], y_test[:100], 
-                                                               blocksize, classifier_model_ldpc, bw_ratio, k, n, m, 10)
+                # Test Adaptive method using configurable number of images
+                adaptive_acc, method_used = adaptive_method_user(
+                    user_channel, x_test[:100], y_test[:100],
+                    blocksize, classifier_model_ldpc, bw_ratio, k, n, m, num_images
+                )
                 
                 user_result = {
                     'user_id': user_channel.user_id,
@@ -733,6 +744,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
             print(f"  Network AAoMI - DJSCC: {network_aomi_djscc:.2f}, LDPC: {network_aomi_ldpc:.2f}, Adaptive: {network_aomi_adaptive:.2f}")
     
     return all_results
+
 
 def plot_separate_results(all_results):
     """Plot separate figures for accuracy and AAoMI with LaTeX formatting"""
