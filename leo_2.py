@@ -85,7 +85,7 @@ class LEOChannel:
                  rician_k=10, transmission_power_watts=10.0, bandwidth_hz=10e6,
                  noise_temperature_k=500, noise_figure_db=2.0):
         """
-        LEO Satellite Channel Model with realistic satellite communication parameters
+        LEO Satellite Channel Model with Rician fading
         """
         self.user_id = user_id
         self.carrier_freq = carrier_freq  # 20 GHz Ka-band (typical for LEO)
@@ -94,7 +94,7 @@ class LEOChannel:
         self.rain_rate = rain_rate  # mm/h
         self.antenna_gain_tx = antenna_gain_tx  # 30 dBi (realistic for LEO satellite)
         self.antenna_gain_rx = antenna_gain_rx  # 25 dBi (realistic for ground station)
-        self.rician_k_linear = 10**(rician_k/10)
+        self.rician_k_linear = 10**(rician_k/10)  # Rician K-factor in linear scale
         self.transmission_power_watts = transmission_power_watts  # 10W (realistic satellite power)
         self.bandwidth_hz = bandwidth_hz  # 10 MHz (typical bandwidth)
         self.noise_temperature_k = noise_temperature_k  # 500K (realistic system temperature)
@@ -104,18 +104,64 @@ class LEOChannel:
         self.c = 3e8
         self.k_boltzmann = 1.38064852e-23  # Boltzmann constant
         
+        # Calculate base SNR without fading
         self.G_total = self.calculate_aggregate_gain()
         self.noise_power = self.calculate_noise_power()
         self.received_power = self.calculate_received_power()
-        self.snr_linear = self.calculate_snr()
-        self.snr_db = 10 * np.log10(self.snr_linear)
+        self.base_snr_linear = self.calculate_base_snr()
+        self.base_snr_db = 10 * np.log10(self.base_snr_linear)
         
-        # Ensure realistic SNR range for satellite communications
-        self.snr_db = max(-5.0, min(20.0, self.snr_db))
+        # Apply Rician fading to get current SNR
+        self.current_fading_gain = self.generate_rician_fading_gain()
+        self.snr_db = self.apply_fading_to_snr(self.base_snr_db)
         self.snr_linear = 10**(self.snr_db / 10)
         
-        print(f"User {user_id}: Elevation={elevation_angle:.1f}°, Rain={rain_rate:.1f}mm/h, SNR={self.snr_db:.2f}dB")
+        print(f"User {user_id}: Elevation={elevation_angle:.1f}°, Rain={rain_rate:.1f}mm/h, Base SNR={self.base_snr_db:.2f}dB, Current SNR={self.snr_db:.2f}dB")
         
+    def generate_rician_fading_gain(self):
+        """
+        Generate Rician fading gain according to equation (4) in the paper
+        h_i = √(K/(K+1)) * h_LOS + √(1/(K+1)) * h_NLOS
+        """
+        # Deterministic LOS component
+        h_LOS = 1.0
+        
+        # Random NLOS component - complex Gaussian
+        h_NLOS_real = np.random.randn() / np.sqrt(2)
+        h_NLOS_imag = np.random.randn() / np.sqrt(2)
+        h_NLOS = h_NLOS_real + 1j * h_NLOS_imag
+        
+        # Combine according to Rician fading formula
+        h_i = (np.sqrt(self.rician_k_linear / (self.rician_k_linear + 1)) * h_LOS + 
+               np.sqrt(1 / (self.rician_k_linear + 1)) * h_NLOS)
+        
+        # Return the magnitude (fading gain)
+        return np.abs(h_i)
+    
+    def apply_fading_to_snr(self, snr_db):
+        """
+        Apply Rician fading effect to SNR
+        Returns faded SNR in dB
+        """
+        # Convert SNR to linear scale, apply fading, then back to dB
+        snr_linear = 10**(snr_db / 10)
+        faded_snr_linear = snr_linear * (self.current_fading_gain ** 2)
+        faded_snr_db = 10 * np.log10(faded_snr_linear)
+        
+        # Ensure realistic SNR range for satellite communications
+        faded_snr_db = max(-5.0, min(20.0, faded_snr_db))
+        
+        return faded_snr_db
+    
+    def update_fading(self):
+        """
+        Update the fading gain with new random values
+        Call this to simulate time-varying fading
+        """
+        self.current_fading_gain = self.generate_rician_fading_gain()
+        self.snr_db = self.apply_fading_to_snr(self.base_snr_db)
+        self.snr_linear = 10**(self.snr_db / 10)
+    
     def calculate_slant_range(self):
         epsilon_rad = math.radians(self.elevation_angle)
         d = self.R_earth * (math.sqrt(((self.orbit_height + self.R_earth) / self.R_earth)**2 - 
@@ -168,8 +214,8 @@ class LEOChannel:
         received_power = self.transmission_power_watts * self.G_total
         return received_power
     
-    def calculate_snr(self):
-        """Calculate SNR from transmission power and channel conditions"""
+    def calculate_base_snr(self):
+        """Calculate base SNR without fading"""
         return self.received_power / self.noise_power
 
 class MultiUserLEOSystem:
@@ -209,8 +255,13 @@ class MultiUserLEOSystem:
             
             self.users.append(user_channel)
     
+    def update_all_fading(self):
+        """Update fading for all users to simulate time variation"""
+        for user in self.users:
+            user.update_fading()
+    
     def get_user_snrs(self):
-        """Get SNR values for all users"""
+        """Get current SNR values for all users with fading"""
         return [user.snr_db for user in self.users]
     
     def get_user_conditions(self):
@@ -221,7 +272,10 @@ class MultiUserLEOSystem:
                 'user_id': user.user_id,
                 'elevation_angle': user.elevation_angle,
                 'rain_rate': user.rain_rate,
-                'snr_db': user.snr_db
+                'base_snr_db': user.base_snr_db,
+                'current_snr_db': user.snr_db,
+                'fading_gain': user.current_fading_gain,
+                'rician_k_dB': 10 * np.log10(user.rician_k_linear)
             })
         return conditions
 
@@ -588,7 +642,7 @@ def train_djscc_awgn(snr_db_train, blocksize):
     model = build_djscc_model(blocksize, channel_type='awgn', snr_db_train=snr_db_train)
     early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=10, restore_best_weights=True, verbose=1)
     
-    history = model.fit(train_ds, epochs=1, validation_data=val_ds, callbacks=[early_stopping], verbose=1)
+    history = model.fit(train_ds, epochs=30, validation_data=val_ds, callbacks=[early_stopping], verbose=1)
     model.save_weights('model_weights_awgn.h5')
     
     if early_stopping.stopped_epoch != 0:
@@ -606,7 +660,7 @@ def test_djscc_user(leo_channel, test_ds, blocksize):
     _, accuracy = model.evaluate(test_ds, verbose=0)
     return accuracy
 
-def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=2):
+def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=10):
     """Improved LDPC+BPG accuracy calculation using TFDS"""
     bpgencoder = BPGEncoder()
     bpgdecoder = BPGDecoder()
@@ -666,7 +720,7 @@ def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classi
     print(f"  LDPC: {successful_images}/{num_images} successful decodes, accuracy: {acc:.4f}")
     return acc
 
-def adaptive_method_user(leo_channel, test_ds, blocksize, classifier_model, bw_ratio=1/3, k=3072, n=4608, m=4, num_images=2):
+def adaptive_method_user(leo_channel, test_ds, blocksize, classifier_model, bw_ratio=1/3, k=3072, n=4608, m=4, num_images=10):
     """
     Adaptive method for a specific user
     Uses calculated SNR from LEO model for decision
@@ -694,7 +748,7 @@ def train_classifier_model_tfds():
     classifier_model = build_classifier_model()
     
     # Train for 10 epochs as in first code
-    classifier_model.fit(train_ds, epochs=1, verbose=1)
+    classifier_model.fit(train_ds, epochs=50, verbose=1)
     classifier_model.save_weights('classifier_model_weights_ldpc_tfds.h5')
     
     return classifier_model
@@ -733,7 +787,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     all_results = []
     
     # Number of test images for LDPC/BPG and adaptive evaluation
-    num_images = 2
+    num_images = 10
 
     for power in transmission_powers:
         print(f"\n--- Evaluating Transmission Power: {power}W ---")
@@ -746,7 +800,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
         
         for user_channel in multi_user_system.users:
             print(f"  User {user_channel.user_id}: Elevation={user_channel.elevation_angle:.1f}°, "
-                  f"Rain={user_channel.rain_rate:.1f}mm/h, SNR={user_channel.snr_db:.2f}dB")
+                  f"Rain={user_channel.rain_rate:.1f}mm/h, Base SNR={user_channel.base_snr_db:.2f}dB, Current SNR={user_channel.snr_db:.2f}dB")
             
             try:
                 # Test DJSCC with AWGN using calculated SNR
@@ -768,7 +822,9 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
                     'transmission_power': power,
                     'elevation_angle': user_channel.elevation_angle,
                     'rain_rate': user_channel.rain_rate,
+                    'base_snr_db': user_channel.base_snr_db,
                     'snr_db': user_channel.snr_db,
+                    'fading_gain': user_channel.current_fading_gain,
                     'djscc_accuracy': djscc_acc,
                     'ldpc_accuracy': ldpc_acc,
                     'adaptive_accuracy': adaptive_acc,
@@ -813,7 +869,6 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     
     return all_results
 
-# [Keep all the plotting and utility functions the same as in the original second code]
 def plot_separate_results(all_results):
     """Plot separate figures for accuracy and AAoMI with LaTeX formatting"""
     powers = [r['transmission_power'] for r in all_results]
@@ -963,7 +1018,6 @@ if __name__ == "__main__":
         print("  Figures:")
         print("    - results/accuracy_comparison.png/.pdf")
         print("    - results/aomi_comparison.png/.pdf") 
-        print("    - results/combined_results.png/.pdf")
         print("  Data files:")
         print("    - results/accuracy_results.csv")
         print("    - results/aomi_results.csv")
