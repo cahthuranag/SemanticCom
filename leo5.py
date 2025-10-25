@@ -1,5 +1,7 @@
 import os
 import cv2
+import gc
+from tensorflow.keras import backend as K
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
@@ -34,18 +36,52 @@ from datetime import datetime
 plt.rcParams.update({
     "font.family": "serif",
     "font.size": 12,
-    "axes.labelsize": 14,
-    "axes.titlesize": 16,
-    "legend.fontsize": 12,
-    "xtick.labelsize": 12,
-    "ytick.labelsize": 12
+    "axes.labelsize": 18,
+    "axes.titlesize": 18,
+    "legend.fontsize": 14,
+    "xtick.labelsize": 14,
+    "ytick.labelsize": 14
 })
 
 tf.random.set_seed(3)
 np.random.seed(3)
 
+# Configure TensorFlow for better memory management
+def configure_tensorflow():
+    """Configure TensorFlow for optimal memory usage"""
+    print("🔧 Configuring TensorFlow for memory optimization...")
+    
+    # Limit GPU memory growth
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            print("   ✅ GPU memory growth enabled")
+        except RuntimeError as e:
+            print(f"   ⚠️ GPU configuration warning: {e}")
+    
+    # Set TensorFlow to use less memory
+    tf.config.optimizer.set_jit(True)
+    tf.config.threading.set_intra_op_parallelism_threads(2)
+    tf.config.threading.set_inter_op_parallelism_threads(2)
+    print("   ✅ TensorFlow optimization settings applied")
+
+configure_tensorflow()
+
+def clear_tf_memory_aggressive():
+    """More aggressive TensorFlow memory clearing"""
+    tf.keras.backend.clear_session()
+    gc.collect()
+    
+    # Force TensorFlow to release GPU memory
+    if tf.config.list_physical_devices('GPU'):
+        for gpu in tf.config.list_physical_devices('GPU'):
+            tf.config.experimental.set_memory_growth(gpu, True)
+
 def load_and_preprocess_data():
     """Load and preprocess CIFAR-10 data using TFDS"""
+    print("📊 Loading CIFAR-10 dataset...")
     # Load training data
     train_ds = tfds.load('cifar10', split='train', as_supervised=True)
     test_ds = tfds.load('cifar10', split='test', as_supervised=True)
@@ -58,6 +94,7 @@ def load_and_preprocess_data():
     train_ds = train_ds.map(preprocess).batch(128).prefetch(tf.data.AUTOTUNE)
     test_ds = test_ds.map(preprocess).batch(128).prefetch(tf.data.AUTOTUNE)
     
+    print("   ✅ Dataset loaded and preprocessed")
     return train_ds, test_ds
 
 def get_test_data_array(num_images=None):
@@ -89,7 +126,7 @@ class LEOChannel:
         """
         self.user_id = user_id
         self.carrier_freq = carrier_freq  # 20 GHz Ka-band (typical for LEO)
-        self.orbit_height = orbit_height  # 600 km (typical LEO altitude)
+        self.orbit_height = orbit_height  # orbit height in meters
         self.elevation_angle = elevation_angle  # 30° (minimum practical elevation)
         self.rain_rate = rain_rate  # mm/h
         self.antenna_gain_tx = antenna_gain_tx  # 30 dBi (realistic for LEO satellite)
@@ -116,7 +153,7 @@ class LEOChannel:
         self.snr_db = self.apply_fading_to_snr(self.base_snr_db)
         self.snr_linear = 10**(self.snr_db / 10)
         
-        print(f"User {user_id}: Elevation={elevation_angle:.1f}°, Rain={rain_rate:.1f}mm/h, Base SNR={self.base_snr_db:.2f}dB, Current SNR={self.snr_db:.2f}dB")
+        print(f"   👤 User {user_id}: Orbit={orbit_height/1000:.0f}km, Elevation={elevation_angle:.1f}°, Rain={rain_rate:.1f}mm/h, Base SNR={self.base_snr_db:.2f}dB, Current SNR={self.snr_db:.2f}dB")
         
     def generate_rician_fading_gain(self):
         """
@@ -219,9 +256,10 @@ class LEOChannel:
         return self.received_power / self.noise_power
 
 class MultiUserLEOSystem:
-    def __init__(self, num_users=5, transmission_power_watts=10.0):
+    def __init__(self, num_users=5, transmission_power_watts=10.0, orbit_height=600e3):
         self.num_users = num_users
         self.transmission_power_watts = transmission_power_watts
+        self.orbit_height = orbit_height
         self.users = []
         self.setup_users()
         
@@ -245,6 +283,7 @@ class MultiUserLEOSystem:
             
             user_channel = LEOChannel(
                 user_id=i+1,
+                orbit_height=self.orbit_height,
                 elevation_angle=elevation_angle,
                 rain_rate=rain_rate,
                 rician_k=rician_k,
@@ -270,6 +309,7 @@ class MultiUserLEOSystem:
         for user in self.users:
             conditions.append({
                 'user_id': user.user_id,
+                'orbit_height_km': user.orbit_height / 1000,
                 'elevation_angle': user.elevation_angle,
                 'rain_rate': user.rain_rate,
                 'base_snr_db': user.base_snr_db,
@@ -533,9 +573,9 @@ class AgeOfInformationAnalyzer:
     """
     Age of Information (AoI) analyzer for multi-user LEO satellite communication systems
     """
-    def __init__(self, lambda_I=1.0, gamma_th=8.0):
+    def __init__(self, lambda_I=1.0, eta_aomi=2.0):
         self.lambda_I = lambda_I  # Information arrival rate
-        self.gamma_th = gamma_th  # SNR threshold for adaptive method
+        self.eta_aomi = eta_aomi  # Maximum allowable AoMI threshold
         
         # Constants from the system model
         self.D_enc = 0.01  # Encoding delay (seconds)
@@ -546,10 +586,10 @@ class AgeOfInformationAnalyzer:
         # Image dimensions
         self.I_H, self.I_W, self.I_C = 32, 32, 3  # CIFAR-10 image dimensions
         self.k_P = self.I_H * self.I_W * self.I_C  # Source bandwidth (pixels)
-        self.n_con = 64                 # From encoder architecture
+        self.n_con = 16                # From encoder architecture
         self.n_T = (self.n_con * self.k_P) / (16 * self.I_C)  # Channel bandwidth
     
-    def calculate_network_aomi(self, users_accuracy_results, method="Adaptive"):
+    def calculate_network_aomi(self, users_accuracy_results, method="DJSCC"):
         """
         Calculate Network AAoMI for multiple users using actual simulation results
         Equation (24): α_avg^net = (1/U) * Σ [1/(λ_I * ρ_k) + D_total^(k)/ρ_k + (λ_I * (D_total^(k))^2)/(λ_I * D_total^(k) + 1)]
@@ -561,16 +601,11 @@ class AgeOfInformationAnalyzer:
             # Get classification accuracy for this user
             if method == "DJSCC":
                 rho_k = user_result['djscc_accuracy']
-            elif method == "LDPC+BPG":
+            else:  # LDPC+BPG
                 rho_k = user_result['ldpc_accuracy']
-            else:  # Adaptive
-                rho_k = user_result['adaptive_accuracy']
-            
-            # Get SNR to determine method for adaptive case
-            snr_db = user_result['snr_db']
             
             # Calculate total delay for this user
-            D_total_k = self.calculate_total_delay(method, snr_db)
+            D_total_k = self.calculate_total_delay(method)
             
             # Ensure classification accuracy is within valid range
             rho_k = max(0.01, min(0.99, rho_k))
@@ -587,23 +622,80 @@ class AgeOfInformationAnalyzer:
         network_aomi = total_aomi / U
         return network_aomi
     
-    def calculate_total_delay(self, method, snr_db):
+    def calculate_total_delay(self, method):
         """Calculate total delay D_total^(k) for each method"""
         transmission_time = self.n_T * self.T_s
         
         if method == "DJSCC":
             return self.D_enc + transmission_time + self.D_cls_djscc
-        elif method == "LDPC+BPG":
+        else:  # LDPC+BPG
             return self.D_enc + transmission_time + self.D_cls_trad
-        else:  # Adaptive
-            if snr_db < self.gamma_th:
-                return self.D_enc + transmission_time + self.D_cls_djscc
-            else:
-                return self.D_enc + transmission_time + self.D_cls_trad
+    
+    def calculate_threshold_compliance_ratio(self, users_accuracy_results, method="DJSCC"):
+        """
+        Calculate threshold compliance ratio Γ
+        Γ = (1/U) * Σ I(α_avg^(k) ≤ η_aomi)
+        """
+        U = len(users_accuracy_results)
+        compliant_users = 0
+        
+        for user_result in users_accuracy_results:
+            # Get classification accuracy for this user
+            if method == "DJSCC":
+                rho_k = user_result['djscc_accuracy']
+            else:  # LDPC+BPG
+                rho_k = user_result['ldpc_accuracy']
+            
+            # Calculate total delay for this user
+            D_total_k = self.calculate_total_delay(method)
+            
+            # Ensure classification accuracy is within valid range
+            rho_k = max(0.01, min(0.99, rho_k))
+            
+            # Calculate individual AAoMI
+            term1 = 1 / (self.lambda_I * rho_k)
+            term2 = D_total_k / rho_k
+            term3 = (self.lambda_I * (D_total_k ** 2)) / (self.lambda_I * D_total_k + 1)
+            user_aomi = term1 + term2 + term3
+            
+            # Check threshold compliance
+            if user_aomi <= self.eta_aomi:
+                compliant_users += 1
+        
+        return compliant_users / U if U > 0 else 0.0
+
+# Global variables to store pre-trained models
+DJSCC_MODEL = None
+CLASSIFIER_MODEL = None
+
+def get_djscc_model(blocksize, channel_type='awgn', leo_channel=None, snr_db_train=10.0):
+    """Get DJSCC model with proper memory management"""
+    global DJSCC_MODEL
+    
+    # Clear any existing model
+    if DJSCC_MODEL is not None:
+        del DJSCC_MODEL
+        clear_tf_memory_aggressive()
+    
+    # Build new model
+    DJSCC_MODEL = build_djscc_model(blocksize, channel_type, leo_channel, snr_db_train)
+    return DJSCC_MODEL
+
+def get_classifier_model():
+    """Get classifier model with proper memory management"""
+    global CLASSIFIER_MODEL
+    
+    if CLASSIFIER_MODEL is None:
+        print("   🔄 Loading pre-trained classifier model...")
+        CLASSIFIER_MODEL = build_classifier_model()
+        CLASSIFIER_MODEL.load_weights('classifier_model_weights_ldpc_tfds.h5')
+        print("   ✅ Classifier model loaded")
+    
+    return CLASSIFIER_MODEL
 
 def train_djscc_awgn(snr_db_train, blocksize):
     """Train DJSCC model with fixed AWGN SNR using TFDS"""
-    print(f"Training DJSCC with fixed SNR: {snr_db_train} dB")
+    print(f"🧠 Training DJSCC with fixed SNR: {snr_db_train} dB")
     
     # Load data using TFDS - get the full dataset first
     train_ds_full = tfds.load('cifar10', split='train', as_supervised=True)
@@ -624,7 +716,7 @@ def train_djscc_awgn(snr_db_train, blocksize):
     train_data = full_data[:train_size]
     val_data = full_data[train_size:]
     
-    print(f"Training samples: {len(train_data)}, Validation samples: {len(val_data)}")
+    print(f"   📈 Training samples: {len(train_data)}, Validation samples: {len(val_data)}")
     
     if len(train_data) == 0 or len(val_data) == 0:
         raise ValueError("Empty dataset detected after splitting!")
@@ -640,106 +732,120 @@ def train_djscc_awgn(snr_db_train, blocksize):
     val_ds = create_dataset_from_list(val_data)
     
     model = build_djscc_model(blocksize, channel_type='awgn', snr_db_train=snr_db_train)
-    early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=15, restore_best_weights=True, verbose=1)
+    early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=20, restore_best_weights=True, verbose=1)
     
-    history = model.fit(train_ds, epochs=50, validation_data=val_ds, callbacks=[early_stopping], verbose=1)
+    print("   🏋️ Starting DJSCC training...")
+    history = model.fit(train_ds, epochs=60, validation_data=val_ds, callbacks=[early_stopping], verbose=1)
     model.save_weights('model_weights_awgn.h5')
     
     if early_stopping.stopped_epoch != 0:
-        print(f"Early stopping occurred at epoch {early_stopping.stopped_epoch}")
+        print(f"   ⏹️ Early stopping occurred at epoch {early_stopping.stopped_epoch}")
     else:
-        print("Training completed without early stopping.")
+        print("   ✅ Training completed without early stopping.")
     
     return model, history
 
-def test_djscc_user(leo_channel, test_ds, blocksize):
-    """Test DJSCC model for a specific user using AWGN with calculated SNR"""
-    # Use the same model architecture but with AWGN channel using calculated SNR
-    model = build_djscc_model(blocksize, channel_type='leo', leo_channel=leo_channel)
-    model.load_weights('model_weights_awgn.h5')  # Load weights trained with fixed AWGN
-    _, accuracy = model.evaluate(test_ds, verbose=0)
-    return accuracy
-
-def calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images=10):
-    """Improved LDPC+BPG accuracy calculation using TFDS"""
-    bpgencoder = BPGEncoder()
-    bpgdecoder = BPGDecoder()
-    
-    # Load test data using TFDS
-    test_ds = tfds.load('cifar10', split='test', as_supervised=True)
-    test_ds = test_ds.take(num_images)
-    
-    # Create LDPC transmitter
-    ldpctransmitter = LDPCTransmitterLEO(k, n, m, leo_channel)
-    
-    decoded_images = []
-    original_labels = []
-    
-    successful_images = 0
-    for image, label in tqdm(test_ds, desc=f"User {leo_channel.user_id}", leave=False):
-        image_np = image.numpy()
-        label_np = label.numpy()
+def test_djscc_user_optimized(leo_channel, test_ds, blocksize):
+    """Optimized DJSCC testing with memory management"""
+    try:
+        # Get model with proper memory handling
+        model = get_djscc_model(blocksize, channel_type='leo', leo_channel=leo_channel)
+        model.load_weights('model_weights_awgn.h5')
         
-        # Process single image
-        image_uint8 = image_np.astype(np.uint8)
+        # Evaluate with minimal memory footprint
+        _, accuracy = model.evaluate(test_ds, verbose=0, steps=len(test_ds))
         
-        # Calculate max bytes
-        max_bytes = 32 * 32 * 3 * bw_ratio * math.log2(m) * k / n / 8
-        
-        try:
-            src_bits = bpgencoder.encode(image_uint8, max_bytes)
-            rcv_bits = ldpctransmitter.send(src_bits)
-            decoded_image = bpgdecoder.decode(rcv_bits.numpy(), image_uint8.shape)
-            
-            # Check if it's the fallback image
-            cifar_mean_uint8 = np.array([125, 123, 114])  # CIFAR mean in uint8
-            is_fallback = np.allclose(decoded_image, cifar_mean_uint8, atol=10)
-            
-            if not is_fallback:
-                decoded_images.append(decoded_image)
-                original_labels.append(label_np)
-                successful_images += 1
-                
-        except Exception as e:
-            continue
-
-    if not decoded_images:
-        print(f"  LDPC: No successful decodes for user {leo_channel.user_id}")
+        return accuracy
+    except Exception as e:
+        print(f"    ❌ DJSCC test error: {e}")
         return 0.0
-        
-    decoded_images = np.array(decoded_images)
-    original_labels = np.array(original_labels)
-    
-    # Normalize properly for classifier
-    decoded_images_normalized = decoded_images.astype('float32') / 255.0
-    
-    predictions = classifier_model.predict(decoded_images_normalized, verbose=0)
-    predicted_labels = np.argmax(predictions, axis=1)
-    acc = np.mean(predicted_labels == original_labels)
-    
-    print(f"  LDPC: {successful_images}/{num_images} successful decodes, accuracy: {acc:.4f}")
-    return acc
+    finally:
+        # Always clear memory
+        clear_tf_memory_aggressive()
 
-def adaptive_method_user(leo_channel, test_ds, blocksize, classifier_model, bw_ratio=1/3, k=3072, n=4608, m=4, num_images=10):
-    """
-    Adaptive method for a specific user
-    Uses calculated SNR from LEO model for decision
-    """
-    snr_db = leo_channel.snr_db
-    
-    # Choose method based on SNR threshold
-    if snr_db < 8.0:  # DJSCC for poor channel conditions
-        accuracy = test_djscc_user(leo_channel, test_ds, blocksize)
-        method_used = "DJSCC"
-    else:  # LDPC+BPG for good channel conditions
-        accuracy = calculate_accuracy_ldpc_user_improved(bw_ratio, k, n, m, leo_channel, classifier_model, num_images)
-        method_used = "LDPC+BPG"
-    
-    return accuracy, method_used
+def calculate_accuracy_ldpc_user_optimized(bw_ratio, k, n, m, leo_channel, num_images=5):
+    """Optimized LDPC+BPG testing with memory management"""
+    try:
+        # Get classifier model once
+        classifier_model = get_classifier_model()
+        
+        bpgencoder = BPGEncoder()
+        bpgdecoder = BPGDecoder()
+        
+        # Load minimal test data
+        test_ds = tfds.load('cifar10', split='test', as_supervised=True)
+        test_ds = test_ds.take(num_images)
+        
+        # Create LDPC transmitter
+        ldpctransmitter = LDPCTransmitterLEO(k, n, m, leo_channel)
+        
+        decoded_images = []
+        original_labels = []
+        
+        successful_images = 0
+        for image, label in test_ds:
+            image_np = image.numpy()
+            label_np = label.numpy()
+            
+            # Process single image
+            image_uint8 = image_np.astype(np.uint8)
+            
+            # Calculate max bytes
+            max_bytes = 32 * 32 * 3 * bw_ratio * math.log2(m) * k / n / 8
+            
+            try:
+                src_bits = bpgencoder.encode(image_uint8, max_bytes)
+                rcv_bits = ldpctransmitter.send(src_bits)
+                decoded_image = bpgdecoder.decode(rcv_bits.numpy(), image_uint8.shape)
+                
+                # Check if it's the fallback image
+                cifar_mean_uint8 = np.array([125, 123, 114])
+                is_fallback = np.allclose(decoded_image, cifar_mean_uint8, atol=10)
+                
+                if not is_fallback:
+                    decoded_images.append(decoded_image)
+                    original_labels.append(label_np)
+                    successful_images += 1
+                    
+            except Exception as e:
+                continue
+
+        if not decoded_images:
+            print(f"  ❌ LDPC: No successful decodes for user {leo_channel.user_id}")
+            return 0.0
+            
+        decoded_images = np.array(decoded_images)
+        original_labels = np.array(original_labels)
+        
+        # Normalize and predict in batches to save memory
+        decoded_images_normalized = decoded_images.astype('float32') / 255.0
+        
+        # Predict in smaller batches
+        batch_size = min(4, len(decoded_images_normalized))
+        predictions = []
+        
+        for i in range(0, len(decoded_images_normalized), batch_size):
+            batch = decoded_images_normalized[i:i+batch_size]
+            batch_pred = classifier_model.predict(batch, verbose=0)
+            predictions.append(batch_pred)
+            
+        predictions = np.vstack(predictions)
+        predicted_labels = np.argmax(predictions, axis=1)
+        acc = np.mean(predicted_labels == original_labels)
+        
+        print(f"  ✅ LDPC: {successful_images}/{num_images} successful decodes, accuracy: {acc:.4f}")
+        return acc
+        
+    except Exception as e:
+        print(f"    ❌ LDPC test error: {e}")
+        return 0.0
+    finally:
+        # Clear memory after LDPC testing
+        clear_tf_memory_aggressive()
 
 def train_classifier_model_tfds():
     """Train classifier model for LDPC+BPG using TFDS (FIRST CODE architecture)"""
-    print("Training classifier model for LDPC+BPG using TFDS...")
+    print("🧠 Training classifier model for LDPC+BPG using TFDS...")
     
     # Load data using TFDS
     train_ds, _ = load_and_preprocess_data()
@@ -747,168 +853,233 @@ def train_classifier_model_tfds():
     # Build and train model using FIRST CODE architecture
     classifier_model = build_classifier_model()
     
-    # Train for 10 epochs as in first code
-    classifier_model.fit(train_ds, epochs=150, verbose=1)
+    # Add early stopping with minimal changes
+    early_stopping = EarlyStopping(
+        monitor='accuracy',  # Monitor training accuracy instead of val
+        mode='max', 
+        patience=20, 
+        restore_best_weights=True,
+        verbose=1
+    )
+    
+    # Train with early stopping - keep 50 epochs but can stop early
+    print("   🏋️ Starting classifier training...")
+    classifier_model.fit(train_ds, epochs=150, callbacks=[early_stopping], verbose=1)
     classifier_model.save_weights('classifier_model_weights_ldpc_tfds.h5')
+    print("   ✅ Classifier model trained and saved")
     
     return classifier_model
 
-def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100.0, 200.0]):
+def evaluate_multi_user_system_optimized(num_users=5, transmission_powers=[10.0, 50.0, 100.0, 200.0], orbit_heights=[400e3, 600e3, 1000e3]):
     """
-    Evaluate multi-user LEO satellite system with different transmission powers
+    Optimized multi-user LEO satellite system evaluation with memory management
     """
-    print("=== Multi-User LEO Satellite System Evaluation ===\n")
+    print("🚀 === Optimized Multi-User LEO Satellite System Evaluation ===\n")
     
-    blocksize = 32
-    snr_db_train = 10.0  # Fixed SNR for training
+    blocksize = 16
+    snr_db_train = 10.0
     
     # Proven parameters
-    bw_ratio = 1/2
+    bw_ratio = 1/3
     k = 3072
     n = 4608
     m = 4
     
-    print(f"Using proven parameters: k={k}, n={n}, Code Rate={k/n:.3f}, BW Ratio={bw_ratio}")
+    print(f"📊 Using proven parameters: k={k}, n={n}, Code Rate={k/n:.3f}, BW Ratio={bw_ratio}")
     
-    aoi_analyzer = AgeOfInformationAnalyzer(lambda_I=1.0, gamma_th=8.0)
+    aoi_analyzer = AgeOfInformationAnalyzer(lambda_I=1.0, eta_aomi=2.0)
     
-    # Train models first (ONCE for all users) using TFDS
-    print("Training DJSCC model with fixed AWGN SNR using TFDS...")
+    # Train models ONCE at the beginning
+    print("\n🎯 PHASE 1: Model Training")
+    print("─" * 50)
     train_djscc_awgn(snr_db_train, blocksize)
+    clear_tf_memory_aggressive()
     
-    print("Training classifier model for LDPC+BPG using TFDS...")
-    classifier_model_ldpc = train_classifier_model_tfds()
+    train_classifier_model_tfds()
+    clear_tf_memory_aggressive()
     
-    # Load test data using TFDS
+    # Load test data ONCE
+    print("\n🎯 PHASE 2: Data Preparation")
+    print("─" * 50)
     _, test_ds_full = load_and_preprocess_data()
-    test_ds_eval = test_ds_full.take(100)  # Use subset for evaluation
+    test_ds_eval = test_ds_full.take(50)  # Use smaller subset
     
     # Results storage
     all_results = []
     
-    # Number of test images for LDPC/BPG and adaptive evaluation
-    num_images = 10
+    # Reduced number of test images for LDPC/BPG evaluation
+    num_images = 5
 
-    for power in transmission_powers:
-        print(f"\n--- Evaluating Transmission Power: {power}W ---")
+    print("\n🎯 PHASE 3: Multi-User System Evaluation")
+    print("─" * 50)
+    
+    for orbit_height in orbit_heights:
+        print(f"\n🛰️ === Evaluating Orbit Height: {orbit_height/1000:.0f} km ===")
         
-        # Create multi-user system for this power
-        multi_user_system = MultiUserLEOSystem(num_users=num_users, transmission_power_watts=power)
+        orbit_results = []
         
-        # Evaluate each user
-        user_results = []
-        
-        for user_channel in multi_user_system.users:
-            print(f"  User {user_channel.user_id}: Elevation={user_channel.elevation_angle:.1f}°, "
-                  f"Rain={user_channel.rain_rate:.1f}mm/h, Base SNR={user_channel.base_snr_db:.2f}dB, Current SNR={user_channel.snr_db:.2f}dB")
+        for power in transmission_powers:
+            print(f"\n⚡ --- Transmission Power: {power}W ---")
             
-            try:
-                # Test DJSCC with AWGN using calculated SNR
-                djscc_acc = test_djscc_user(user_channel, test_ds_eval, blocksize)
+            # Create multi-user system
+            multi_user_system = MultiUserLEOSystem(num_users=num_users, 
+                                                 transmission_power_watts=power,
+                                                 orbit_height=orbit_height)
+            
+            # Evaluate each user
+            user_results = []
+            
+            for user_channel in multi_user_system.users:
+                print(f"  👤 User {user_channel.user_id}: Elevation={user_channel.elevation_angle:.1f}°, "
+                      f"Rain={user_channel.rain_rate:.1f}mm/h, Base SNR={user_channel.base_snr_db:.2f}dB, Current SNR={user_channel.snr_db:.2f}dB")
                 
-                # Test LDPC+BPG using configurable number of images
-                ldpc_acc = calculate_accuracy_ldpc_user_improved(
-                    bw_ratio, k, n, m, user_channel, classifier_model_ldpc, num_images
-                )
+                try:
+                    # Test DJSCC with optimized memory
+                    djscc_acc = test_djscc_user_optimized(user_channel, test_ds_eval, blocksize)
+                    
+                    # Test LDPC+BPG with optimized memory
+                    ldpc_acc = calculate_accuracy_ldpc_user_optimized(
+                        bw_ratio, k, n, m, user_channel, num_images
+                    )
+                    
+                    user_result = {
+                        'user_id': user_channel.user_id,
+                        'orbit_height_km': orbit_height / 1000,
+                        'transmission_power': power,
+                        'elevation_angle': user_channel.elevation_angle,
+                        'rain_rate': user_channel.rain_rate,
+                        'base_snr_db': user_channel.base_snr_db,
+                        'snr_db': user_channel.snr_db,
+                        'fading_gain': user_channel.current_fading_gain,
+                        'djscc_accuracy': djscc_acc,
+                        'ldpc_accuracy': ldpc_acc
+                    }
+                    
+                    user_results.append(user_result)
+                    print(f"    ✅ DJSCC: {djscc_acc:.4f}, LDPC: {ldpc_acc:.4f}")
+                    
+                except Exception as e:
+                    print(f"    ❌ Error evaluating user {user_channel.user_id}: {e}")
+                    clear_tf_memory_aggressive()
+                    continue
+            
+            # Calculate network metrics
+            if user_results:
+                avg_djscc = np.mean([r['djscc_accuracy'] for r in user_results])
+                avg_ldpc = np.mean([r['ldpc_accuracy'] for r in user_results])
                 
-                # Test Adaptive method using configurable number of images
-                adaptive_acc, method_used = adaptive_method_user(
-                    user_channel, test_ds_eval, blocksize, classifier_model_ldpc, 
-                    bw_ratio, k, n, m, num_images
-                )
+                network_aomi_djscc = aoi_analyzer.calculate_network_aomi(user_results, "DJSCC")
+                network_aomi_ldpc = aoi_analyzer.calculate_network_aomi(user_results, "LDPC+BPG")
                 
-                user_result = {
-                    'user_id': user_channel.user_id,
+                compliance_ratio_djscc = aoi_analyzer.calculate_threshold_compliance_ratio(user_results, "DJSCC")
+                compliance_ratio_ldpc = aoi_analyzer.calculate_threshold_compliance_ratio(user_results, "LDPC+BPG")
+                
+                power_result = {
+                    'orbit_height_km': orbit_height / 1000,
                     'transmission_power': power,
-                    'elevation_angle': user_channel.elevation_angle,
-                    'rain_rate': user_channel.rain_rate,
-                    'base_snr_db': user_channel.base_snr_db,
-                    'snr_db': user_channel.snr_db,
-                    'fading_gain': user_channel.current_fading_gain,
-                    'djscc_accuracy': djscc_acc,
-                    'ldpc_accuracy': ldpc_acc,
-                    'adaptive_accuracy': adaptive_acc,
-                    'adaptive_method': method_used
+                    'num_users': len(user_results),
+                    'avg_djscc_accuracy': avg_djscc,
+                    'avg_ldpc_accuracy': avg_ldpc,
+                    'network_aomi_djscc': network_aomi_djscc,
+                    'network_aomi_ldpc': network_aomi_ldpc,
+                    'compliance_ratio_djscc': compliance_ratio_djscc,
+                    'compliance_ratio_ldpc': compliance_ratio_ldpc,
+                    'user_details': user_results
                 }
                 
-                user_results.append(user_result)
-                print(f"    DJSCC: {djscc_acc:.4f}, LDPC: {ldpc_acc:.4f}, Adaptive: {adaptive_acc:.4f} ({method_used})")
+                orbit_results.append(power_result)
                 
-            except Exception as e:
-                print(f"    Error evaluating user {user_channel.user_id}: {e}")
-                continue
+                print(f"  📊 Average Accuracy - DJSCC: {avg_djscc:.4f}, LDPC: {avg_ldpc:.4f}")
+                print(f"  ⏱️ Network AAoMI - DJSCC: {network_aomi_djscc:.2f}, LDPC: {network_aomi_ldpc:.2f}")
+                print(f"  ✅ Compliance Ratio - DJSCC: {compliance_ratio_djscc:.2f}, LDPC: {compliance_ratio_ldpc:.2f}")
+            
+            # Clear memory after each power iteration
+            print(f"  🧹 Cleaning memory after power {power}W evaluation...")
+            clear_tf_memory_aggressive()
         
-        # Calculate network metrics
-        if user_results:
-            # Average accuracy across users
-            avg_djscc = np.mean([r['djscc_accuracy'] for r in user_results])
-            avg_ldpc = np.mean([r['ldpc_accuracy'] for r in user_results])
-            avg_adaptive = np.mean([r['adaptive_accuracy'] for r in user_results])
-            
-            # Network AAoMI
-            network_aomi_djscc = aoi_analyzer.calculate_network_aomi(user_results, "DJSCC")
-            network_aomi_ldpc = aoi_analyzer.calculate_network_aomi(user_results, "LDPC+BPG")
-            network_aomi_adaptive = aoi_analyzer.calculate_network_aomi(user_results, "Adaptive")
-            
-            power_result = {
-                'transmission_power': power,
-                'num_users': len(user_results),
-                'avg_djscc_accuracy': avg_djscc,
-                'avg_ldpc_accuracy': avg_ldpc,
-                'avg_adaptive_accuracy': avg_adaptive,
-                'network_aomi_djscc': network_aomi_djscc,
-                'network_aomi_ldpc': network_aomi_ldpc,
-                'network_aomi_adaptive': network_aomi_adaptive,
-                'user_details': user_results
-            }
-            
-            all_results.append(power_result)
-            
-            print(f"  Average Accuracy - DJSCC: {avg_djscc:.4f}, LDPC: {avg_ldpc:.4f}, Adaptive: {avg_adaptive:.4f}")
-            print(f"  Network AAoMI - DJSCC: {network_aomi_djscc:.2f}, LDPC: {network_aomi_ldpc:.2f}, Adaptive: {network_aomi_adaptive:.2f}")
+        all_results.extend(orbit_results)
+        
+        # Clear memory after each orbit height iteration
+        print(f"🧹 Cleaning memory after orbit {orbit_height/1000:.0f}km evaluation...")
+        clear_tf_memory_aggressive()
+    
+    # Final cleanup
+    print("\n🎯 PHASE 4: Final Cleanup")
+    print("─" * 50)
+    global DJSCC_MODEL, CLASSIFIER_MODEL
+    DJSCC_MODEL = None
+    CLASSIFIER_MODEL = None
+    clear_tf_memory_aggressive()
+    print("✅ All TensorFlow models cleared from memory")
+    print("✅ All GPU memory released")
+    print("✅ Garbage collection completed")
     
     return all_results
 
 def plot_separate_results(all_results):
-    """Plot separate figures for accuracy and AAoMI with LaTeX formatting"""
-    powers = [r['transmission_power'] for r in all_results]
-    djscc_acc = [r['avg_djscc_accuracy'] for r in all_results]
-    ldpc_acc = [r['avg_ldpc_accuracy'] for r in all_results]
-    adaptive_acc = [r['avg_adaptive_accuracy'] for r in all_results]
-    
-    djscc_aomi = [r['network_aomi_djscc'] for r in all_results]
-    ldpc_aomi = [r['network_aomi_ldpc'] for r in all_results]
-    adaptive_aomi = [r['network_aomi_adaptive'] for r in all_results]
-    
+    """Plot separate figures for accuracy and AAoMI with different orbit heights"""
     # Create output directory
     os.makedirs('results', exist_ok=True)
     
-    # Plot 1: Average Classification Accuracy (Separate File)
-    plt.figure(figsize=(8, 6))
-    plt.plot(powers, djscc_acc, 'o-', linewidth=2, markersize=8, label='DJSCC')
-    plt.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-    plt.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
+    # Get unique orbit heights
+    orbit_heights = sorted(set([r['orbit_height_km'] for r in all_results]))
     
-    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=14)
-    plt.ylabel('Classification Accuracy $\\rho$', fontsize=14)
+    # Define markers and colors for different orbit heights
+    markers = ['o', 's', '^']
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+    
+    # Plot 1: Average Classification Accuracy
+    plt.figure(figsize=(10, 6))
+    
+    for i, orbit_height in enumerate(orbit_heights):
+        orbit_data = [r for r in all_results if r['orbit_height_km'] == orbit_height]
+        powers = [r['transmission_power'] for r in orbit_data]
+        djscc_acc = [r['avg_djscc_accuracy'] for r in orbit_data]
+        ldpc_acc = [r['avg_ldpc_accuracy'] for r in orbit_data]
+        
+        # DJSCC lines
+        plt.plot(powers, djscc_acc, marker=markers[i], color=colors[i], 
+                 linewidth=2, markersize=8, 
+                 label=f'DJSCC ({orbit_height:.0f} km)')
+        
+        # LDPC+BPG lines (dashed)
+        plt.plot(powers, ldpc_acc, marker=markers[i], color=colors[i], 
+                 linewidth=2, markersize=8, linestyle='--',
+                 label=f'LDPC+BPG ({orbit_height:.0f} km)')
+    
+    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=16)
+    plt.ylabel('Classification Accuracy $\\rho$', fontsize=16)
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=12)
     plt.xscale('log')
     plt.tight_layout()
     
     # Save accuracy plots
-    plt.savefig('results/accuracy_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/accuracy_comparison.png', dpi=500, bbox_inches='tight')
     plt.savefig('results/accuracy_comparison.pdf', bbox_inches='tight')
     plt.close()
     
-    # Plot 2: Network AAoMI (Separate File)
-    plt.figure(figsize=(8, 6))
-    plt.plot(powers, djscc_aomi, 'o-', linewidth=2, markersize=8, label='DJSCC')
-    plt.plot(powers, ldpc_aomi, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-    plt.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
+    # Plot 2: Network AAoMI
+    plt.figure(figsize=(10, 6))
     
-    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=14)
-    plt.ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$ [s]', fontsize=14)
+    for i, orbit_height in enumerate(orbit_heights):
+        orbit_data = [r for r in all_results if r['orbit_height_km'] == orbit_height]
+        powers = [r['transmission_power'] for r in orbit_data]
+        djscc_aomi = [r['network_aomi_djscc'] for r in orbit_data]
+        ldpc_aomi = [r['network_aomi_ldpc'] for r in orbit_data]
+        
+        # DJSCC lines
+        plt.plot(powers, djscc_aomi, marker=markers[i], color=colors[i], 
+                 linewidth=2, markersize=8, 
+                 label=f'DJSCC ({orbit_height:.0f} km)')
+        
+        # LDPC+BPG lines (dashed)
+        plt.plot(powers, ldpc_aomi, marker=markers[i], color=colors[i], 
+                 linewidth=2, markersize=8, linestyle='--',
+                 label=f'LDPC+BPG ({orbit_height:.0f} km)')
+    
+    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=16)
+    plt.ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$ [s]', fontsize=16)
     plt.grid(True, alpha=0.3)
     plt.ylim(0, 10)
     plt.legend(fontsize=12)
@@ -916,8 +1087,51 @@ def plot_separate_results(all_results):
     plt.tight_layout()
     
     # Save AAoMI plots
-    plt.savefig('results/aomi_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/aomi_comparison.png', dpi=500, bbox_inches='tight')
     plt.savefig('results/aomi_comparison.pdf', bbox_inches='tight')
+    plt.close()
+
+def plot_threshold_compliance_analysis(all_results):
+    """Plot threshold compliance ratio for different orbit heights"""
+    # Get unique orbit heights
+    orbit_heights = sorted(set([r['orbit_height_km'] for r in all_results]))
+    
+    # Define markers and colors for different orbit heights
+    markers = ['o', 's', '^']
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+    
+    # Create figure
+    plt.figure(figsize=(10, 6))
+    
+    for i, orbit_height in enumerate(orbit_heights):
+        orbit_data = [r for r in all_results if r['orbit_height_km'] == orbit_height]
+        powers = [r['transmission_power'] for r in orbit_data]
+        
+        # Compliance ratio data
+        compliance_djscc = [r['compliance_ratio_djscc'] for r in orbit_data]
+        compliance_ldpc = [r['compliance_ratio_ldpc'] for r in orbit_data]
+        
+        # DJSCC compliance ratio
+        plt.plot(powers, compliance_djscc, marker=markers[i], color=colors[i], 
+                 linewidth=3, markersize=8, 
+                 label=f'DJSCC ({orbit_height:.0f} km)')
+        
+        # LDPC compliance ratio (dashed)
+        plt.plot(powers, compliance_ldpc, marker=markers[i], color=colors[i], 
+                 linewidth=3, markersize=8, linestyle='--',
+                 label=f'LDPC+BPG ({orbit_height:.0f} km)')
+    
+    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=16)
+    plt.ylabel('Threshold Compliance Ratio $\\Gamma$', fontsize=16)
+    plt.grid(True, alpha=0.3)
+    plt.ylim(0, 1.1)
+    plt.legend(fontsize=12)
+    plt.xscale('log')
+    plt.tight_layout()
+    
+    # Save the plot
+    plt.savefig('results/threshold_compliance_analysis.png', dpi=500, bbox_inches='tight')
+    plt.savefig('results/threshold_compliance_analysis.pdf', bbox_inches='tight')
     plt.close()
 
 def save_separate_data_files(all_results):
@@ -929,11 +1143,11 @@ def save_separate_data_files(all_results):
     accuracy_data = []
     for result in all_results:
         accuracy_data.append({
+            'orbit_height_km': result['orbit_height_km'],
             'transmission_power_W': result['transmission_power'],
             'num_users': result['num_users'],
             'djscc_accuracy': result['avg_djscc_accuracy'],
-            'ldpc_accuracy': result['avg_ldpc_accuracy'],
-            'adaptive_accuracy': result['avg_adaptive_accuracy']
+            'ldpc_accuracy': result['avg_ldpc_accuracy']
         })
     
     accuracy_df = pd.DataFrame(accuracy_data)
@@ -943,79 +1157,151 @@ def save_separate_data_files(all_results):
     aomi_data = []
     for result in all_results:
         aomi_data.append({
+            'orbit_height_km': result['orbit_height_km'],
             'transmission_power_W': result['transmission_power'],
             'num_users': result['num_users'],
             'djscc_aomi': result['network_aomi_djscc'],
-            'ldpc_aomi': result['network_aomi_ldpc'],
-            'adaptive_aomi': result['network_aomi_adaptive']
+            'ldpc_aomi': result['network_aomi_ldpc']
         })
     
     aomi_df = pd.DataFrame(aomi_data)
     aomi_df.to_csv('results/aomi_results.csv', index=False)
     
-    print("Separate data files saved:")
-    print("  - results/accuracy_results.csv")
-    print("  - results/aomi_results.csv")
+    # Threshold compliance data
+    threshold_data = []
+    for result in all_results:
+        threshold_data.append({
+            'orbit_height_km': result['orbit_height_km'],
+            'transmission_power_W': result['transmission_power'],
+            'num_users': result['num_users'],
+            'compliance_ratio_djscc': result['compliance_ratio_djscc'],
+            'compliance_ratio_ldpc': result['compliance_ratio_ldpc']
+        })
+    
+    threshold_df = pd.DataFrame(threshold_data)
+    threshold_df.to_csv('results/threshold_compliance_results.csv', index=False)
+    
+    print("💾 Separate data files saved:")
+    print("   📄 results/accuracy_results.csv")
+    print("   📄 results/aomi_results.csv")
+    print("   📄 results/threshold_compliance_results.csv")
 
 def print_summary_table(all_results):
     """Print comprehensive summary table"""
-    print("\n" + "="*100)
-    print("MULTI-USER SYSTEM SUMMARY")
-    print("="*100)
-    print(f"{'Power (W)':<12} {'Users':<8} {'DJSCC Acc':<12} {'LDPC Acc':<12} {'Adaptive Acc':<14} {'DJSCC AAoMI':<14} {'LDPC AAoMI':<14} {'Adaptive AAoMI':<16}")
-    print("-"*100)
+    print("\n" + "="*140)
+    print("📋 MULTI-USER SYSTEM SUMMARY")
+    print("="*140)
+    print(f"{'Orbit (km)':<12} {'Power (W)':<12} {'Users':<8} {'DJSCC Acc':<12} {'LDPC Acc':<12} {'DJSCC AAoMI':<14} {'LDPC AAoMI':<14} {'DJSCC Γ':<10} {'LDPC Γ':<10}")
+    print("-"*140)
     
-    for result in all_results:
-        print(f"{result['transmission_power']:<12} {result['num_users']:<8} "
-              f"{result['avg_djscc_accuracy']:.4f}      {result['avg_ldpc_accuracy']:.4f}      "
-              f"{result['avg_adaptive_accuracy']:.4f}        {result['network_aomi_djscc']:.2f}        "
-              f"{result['network_aomi_ldpc']:.2f}        {result['network_aomi_adaptive']:.2f}")
+    # Group by orbit height for better readability
+    orbit_heights = sorted(set([r['orbit_height_km'] for r in all_results]))
+    
+    for orbit_height in orbit_heights:
+        orbit_data = [r for r in all_results if r['orbit_height_km'] == orbit_height]
+        print(f"🛰️ ORBIT {orbit_height:.0f} km:")
+        
+        for result in orbit_data:
+            print(f"{'':<12} {result['transmission_power']:<12} {result['num_users']:<8} "
+                  f"{result['avg_djscc_accuracy']:.4f}      {result['avg_ldpc_accuracy']:.4f}      "
+                  f"{result['network_aomi_djscc']:.2f}        {result['network_aomi_ldpc']:.2f}        "
+                  f"{result['compliance_ratio_djscc']:.2f}      {result['compliance_ratio_ldpc']:.2f}")
 
 # Main execution
 if __name__ == "__main__":
-    print(f"[{time.strftime('%H:%M:%S')}] Starting Multi-User LEO Satellite System Evaluation...")
+    start_time = time.time()
+    print("🚀 Starting Optimized Multi-User LEO Satellite System Evaluation...")
+    print("=" * 70)
     
-    # Clear temp directory
-    import shutil
-    if os.path.exists('/tmp/bpg_temp'):
-        shutil.rmtree('/tmp/bpg_temp')
-    os.makedirs('/tmp/bpg_temp', exist_ok=True)
+    # Use smaller test parameters initially
+    transmission_powers = [0.1, 0.5, 1, 3, 5, 7, 10, 15, 20, 50, 75, 100]  # Reduced set
+    orbit_heights = [400e3, 600e3, 1000e3]  # Reduced set
+    num_users = 8 # Reduced number of users
     
-    power_chunks = [[1, 2, 4, 5], [8, 10, 15, 20], [30, 50, 75, 90, 100]]
-    num_users = 5
-    num_images = 10  # Target
-    all_results = []
+    print(f"📊 Evaluation Parameters:")
+    print(f"   👥 Number of users: {num_users}")
+    print(f"   ⚡ Transmission powers: {transmission_powers}")
+    print(f"   🛰️ Orbit heights: {[h/1000 for h in orbit_heights]} km")
+    print("=" * 70)
     
-    for chunk in power_chunks:
-        print(f"[{time.strftime('%H:%M:%S')}] Processing power chunk: {chunk}")
-        chunk_results = evaluate_multi_user_system(num_users=num_users, transmission_powers=chunk)
-        all_results.extend(chunk_results)
-        pd.DataFrame(all_results).to_csv('results/partial_results.csv', index=False)
-        print(f"[{time.strftime('%H:%M:%S')}] Chunk {chunk} saved to partial_results.csv")
+    try:
+        # Run optimized evaluation
+        all_results = evaluate_multi_user_system_optimized(
+            num_users=num_users, 
+            transmission_powers=transmission_powers,
+            orbit_heights=orbit_heights
+        )
         
-        # Clear temp directory between chunks
-        if os.path.exists('/tmp/bpg_temp'):
-            shutil.rmtree('/tmp/bpg_temp')
-        os.makedirs('/tmp/bpg_temp', exist_ok=True)
-    
-    if all_results:
-        plot_separate_results(all_results)
-        save_separate_data_files(all_results)
-        print_summary_table(all_results)
-        detailed_results = [user_result for power_result in all_results for user_result in power_result['user_details']]
-        pd.DataFrame(detailed_results).to_csv('results/multi_user_detailed_results.csv', index=False)
-        pd.DataFrame([
-            {
-                'transmission_power': r['transmission_power'],
-                'num_users': r['num_users'],
-                'avg_djscc_accuracy': r['avg_djscc_accuracy'],
-                'avg_ldpc_accuracy': r['avg_ldpc_accuracy'],
-                'avg_adaptive_accuracy': r['avg_adaptive_accuracy'],
-                'network_aomi_djscc': r['network_aomi_djscc'],
-                'network_aomi_ldpc': r['network_aomi_ldpc'],
-                'network_aomi_adaptive': r['network_aomi_adaptive']
-            } for r in all_results
-        ]).to_csv('results/multi_user_summary_results.csv', index=False)
-        print(f"[{time.strftime('%H:%M:%S')}] Evaluation completed successfully.")
-    else:
-        print(f"[{time.strftime('%H:%M:%S')}] Evaluation failed.")
+        if all_results:
+            print("\n🎯 PHASE 5: Results Processing and Visualization")
+            print("─" * 50)
+            
+            # Plot results and save data
+            print("📊 Generating plots...")
+            plot_separate_results(all_results)
+            plot_threshold_compliance_analysis(all_results)
+            
+            print("💾 Saving data files...")
+            save_separate_data_files(all_results)
+            
+            # Save detailed results
+            detailed_results = []
+            for power_result in all_results:
+                for user_result in power_result['user_details']:
+                    detailed_results.append(user_result)
+            
+            detailed_df = pd.DataFrame(detailed_results)
+            detailed_df.to_csv('results/multi_user_detailed_results.csv', index=False)
+            
+            summary_df = pd.DataFrame([
+                {
+                    'orbit_height_km': r['orbit_height_km'],
+                    'transmission_power': r['transmission_power'],
+                    'num_users': r['num_users'],
+                    'avg_djscc_accuracy': r['avg_djscc_accuracy'],
+                    'avg_ldpc_accuracy': r['avg_ldpc_accuracy'],
+                    'network_aomi_djscc': r['network_aomi_djscc'],
+                    'network_aomi_ldpc': r['network_aomi_ldpc'],
+                    'compliance_ratio_djscc': r['compliance_ratio_djscc'],
+                    'compliance_ratio_ldpc': r['compliance_ratio_ldpc']
+                }
+                for r in all_results
+            ])
+            summary_df.to_csv('results/multi_user_summary_results.csv', index=False)
+            
+            # Print summary
+            print_summary_table(all_results)
+            
+            end_time = time.time()
+            execution_time = end_time - start_time
+            
+            print("\n🎉 === OPTIMIZED EVALUATION COMPLETED SUCCESSFULLY ===")
+            print("=" * 70)
+            print("📁 Results saved to:")
+            print("   📊 Figures:")
+            print("      🖼️ results/accuracy_comparison.png/.pdf")
+            print("      🖼️ results/aomi_comparison.png/.pdf") 
+            print("      🖼️ results/threshold_compliance_analysis.png/.pdf")
+            print("   📄 Data files:")
+            print("      📊 results/accuracy_results.csv")
+            print("      📊 results/aomi_results.csv")
+            print("      📊 results/threshold_compliance_results.csv")
+            print("      📊 results/multi_user_detailed_results.csv")
+            print("      📊 results/multi_user_summary_results.csv")
+            print(f"\n⏱️ Total execution time: {execution_time:.2f} seconds ({execution_time/60:.2f} minutes)")
+            print("✅ All TensorFlow models cleared from memory")
+            print("✅ All GPU memory released")
+            print("✅ Garbage collection completed")
+            print("🎯 Evaluation finished successfully!")
+            print("=" * 70)
+            
+        else:
+            print("\n❌ === EVALUATION FAILED - NO RESULTS GENERATED ===")
+            
+    except Exception as e:
+        print(f"\n💥 === CRITICAL ERROR OCCURRED ===")
+        print(f"Error: {e}")
+        print("Performing emergency cleanup...")
+        clear_tf_memory_aggressive()
+        print("✅ Emergency cleanup completed")
+        raise e

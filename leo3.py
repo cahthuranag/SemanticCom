@@ -34,11 +34,11 @@ from datetime import datetime
 plt.rcParams.update({
     "font.family": "serif",
     "font.size": 12,
-    "axes.labelsize": 14,
-    "axes.titlesize": 16,
-    "legend.fontsize": 12,
-    "xtick.labelsize": 12,
-    "ytick.labelsize": 12
+    "axes.labelsize": 18,
+    "axes.titlesize": 18,
+    "legend.fontsize": 14,
+    "xtick.labelsize": 14,
+    "ytick.labelsize": 14
 })
 
 tf.random.set_seed(3)
@@ -546,7 +546,7 @@ class AgeOfInformationAnalyzer:
         # Image dimensions
         self.I_H, self.I_W, self.I_C = 32, 32, 3  # CIFAR-10 image dimensions
         self.k_P = self.I_H * self.I_W * self.I_C  # Source bandwidth (pixels)
-        self.n_con = 64                 # From encoder architecture
+        self.n_con = 16                # From encoder architecture
         self.n_T = (self.n_con * self.k_P) / (16 * self.I_C)  # Channel bandwidth
     
     def calculate_network_aomi(self, users_accuracy_results, method="Adaptive"):
@@ -640,9 +640,9 @@ def train_djscc_awgn(snr_db_train, blocksize):
     val_ds = create_dataset_from_list(val_data)
     
     model = build_djscc_model(blocksize, channel_type='awgn', snr_db_train=snr_db_train)
-    early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=15, restore_best_weights=True, verbose=1)
+    early_stopping = EarlyStopping(monitor='val_accuracy', mode='max', patience=20, restore_best_weights=True, verbose=1)
     
-    history = model.fit(train_ds, epochs=50, validation_data=val_ds, callbacks=[early_stopping], verbose=1)
+    history = model.fit(train_ds, epochs=60, validation_data=val_ds, callbacks=[early_stopping], verbose=1)
     model.save_weights('model_weights_awgn.h5')
     
     if early_stopping.stopped_epoch != 0:
@@ -747,11 +747,21 @@ def train_classifier_model_tfds():
     # Build and train model using FIRST CODE architecture
     classifier_model = build_classifier_model()
     
-    # Train for 10 epochs as in first code
-    classifier_model.fit(train_ds, epochs=150, verbose=1)
+    # Add early stopping with minimal changes
+    early_stopping = EarlyStopping(
+        monitor='accuracy',  # Monitor training accuracy instead of val
+        mode='max', 
+        patience=20, 
+        restore_best_weights=True,
+        verbose=1
+    )
+    
+    # Train with early stopping - keep 50 epochs but can stop early
+    classifier_model.fit(train_ds, epochs=150, callbacks=[early_stopping], verbose=1)
     classifier_model.save_weights('classifier_model_weights_ldpc_tfds.h5')
     
     return classifier_model
+
 
 def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100.0, 200.0]):
     """
@@ -763,7 +773,7 @@ def evaluate_multi_user_system(num_users=5, transmission_powers=[10.0, 50.0, 100
     snr_db_train = 10.0  # Fixed SNR for training
     
     # Proven parameters
-    bw_ratio = 1/2
+    bw_ratio = 1/3
     k = 3072
     n = 4608
     m = 4
@@ -885,38 +895,38 @@ def plot_separate_results(all_results):
     
     # Plot 1: Average Classification Accuracy (Separate File)
     plt.figure(figsize=(8, 6))
-    plt.plot(powers, djscc_acc, 'o-', linewidth=2, markersize=8, label='DJSCC')
-    plt.plot(powers, ldpc_acc, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-    plt.plot(powers, adaptive_acc, '^-', linewidth=2, markersize=8, label='Adaptive')
+    plt.plot(powers, djscc_acc, 'o-', linewidth=3, markersize=8, label='DJSCC')
+    plt.plot(powers, ldpc_acc, 's-', linewidth=3, markersize=8, label='LDPC+BPG')
+    plt.plot(powers, adaptive_acc, '^-', linewidth=3, markersize=8, label='Adaptive')
     
-    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=14)
-    plt.ylabel('Classification Accuracy $\\rho$', fontsize=14)
+    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=16)
+    plt.ylabel('Classification Accuracy $\\rho$', fontsize=16)
     plt.grid(True, alpha=0.3)
-    plt.legend(fontsize=12)
+    plt.legend(fontsize=14)
     plt.xscale('log')
     plt.tight_layout()
     
     # Save accuracy plots
-    plt.savefig('results/accuracy_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/accuracy_comparison.png', dpi=500, bbox_inches='tight')
     plt.savefig('results/accuracy_comparison.pdf', bbox_inches='tight')
     plt.close()
     
     # Plot 2: Network AAoMI (Separate File)
     plt.figure(figsize=(8, 6))
-    plt.plot(powers, djscc_aomi, 'o-', linewidth=2, markersize=8, label='DJSCC')
-    plt.plot(powers, ldpc_aomi, 's-', linewidth=2, markersize=8, label='LDPC+BPG')
-    plt.plot(powers, adaptive_aomi, '^-', linewidth=2, markersize=8, label='Adaptive')
+    plt.plot(powers, djscc_aomi, 'o-', linewidth=3, markersize=8, label='DJSCC')
+    plt.plot(powers, ldpc_aomi, 's-', linewidth=3, markersize=8, label='LDPC+BPG')
+    plt.plot(powers, adaptive_aomi, '^-', linewidth=3, markersize=8, label='Adaptive')
     
-    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=14)
-    plt.ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$ [s]', fontsize=14)
+    plt.xlabel('Transmission Power $P_T$ [W]', fontsize=16)
+    plt.ylabel('Network AAoMI $\\alpha_{\\text{avg}}^{\\text{net}}$ [s]', fontsize=16)
     plt.grid(True, alpha=0.3)
     plt.ylim(0, 10)
-    plt.legend(fontsize=12)
+    plt.legend(fontsize=14)
     plt.xscale('log')
     plt.tight_layout()
     
     # Save AAoMI plots
-    plt.savefig('results/aomi_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('results/aomi_comparison.png', dpi=500, bbox_inches='tight')
     plt.savefig('results/aomi_comparison.pdf', bbox_inches='tight')
     plt.close()
 
@@ -973,38 +983,33 @@ def print_summary_table(all_results):
 
 # Main execution
 if __name__ == "__main__":
-    print(f"[{time.strftime('%H:%M:%S')}] Starting Multi-User LEO Satellite System Evaluation...")
+    # Run multi-user evaluation
+    print("Starting Multi-User LEO Satellite System Evaluation...")
     
-    # Clear temp directory
-    import shutil
-    if os.path.exists('/tmp/bpg_temp'):
-        shutil.rmtree('/tmp/bpg_temp')
-    os.makedirs('/tmp/bpg_temp', exist_ok=True)
-    
-    power_chunks = [[1, 2, 4, 5], [8, 10, 15, 20], [30, 50, 75, 90, 100]]
+    # Define transmission powers to test
+    transmission_powers = [1,3, 6, 8, 10, 15, 20, 50, 60, 90, 100]
     num_users = 5
-    num_images = 10  # Target
-    all_results = []
     
-    for chunk in power_chunks:
-        print(f"[{time.strftime('%H:%M:%S')}] Processing power chunk: {chunk}")
-        chunk_results = evaluate_multi_user_system(num_users=num_users, transmission_powers=chunk)
-        all_results.extend(chunk_results)
-        pd.DataFrame(all_results).to_csv('results/partial_results.csv', index=False)
-        print(f"[{time.strftime('%H:%M:%S')}] Chunk {chunk} saved to partial_results.csv")
-        
-        # Clear temp directory between chunks
-        if os.path.exists('/tmp/bpg_temp'):
-            shutil.rmtree('/tmp/bpg_temp')
-        os.makedirs('/tmp/bpg_temp', exist_ok=True)
+    # Run evaluation
+    all_results = evaluate_multi_user_system(num_users=num_users, transmission_powers=transmission_powers)
     
     if all_results:
+        # Plot separate results
         plot_separate_results(all_results)
+        
+        # Save separate data files
         save_separate_data_files(all_results)
-        print_summary_table(all_results)
-        detailed_results = [user_result for power_result in all_results for user_result in power_result['user_details']]
-        pd.DataFrame(detailed_results).to_csv('results/multi_user_detailed_results.csv', index=False)
-        pd.DataFrame([
+        
+        # Save detailed results
+        detailed_results = []
+        for power_result in all_results:
+            for user_result in power_result['user_details']:
+                detailed_results.append(user_result)
+        
+        detailed_df = pd.DataFrame(detailed_results)
+        detailed_df.to_csv('results/multi_user_detailed_results.csv', index=False)
+        
+        summary_df = pd.DataFrame([
             {
                 'transmission_power': r['transmission_power'],
                 'num_users': r['num_users'],
@@ -1014,8 +1019,23 @@ if __name__ == "__main__":
                 'network_aomi_djscc': r['network_aomi_djscc'],
                 'network_aomi_ldpc': r['network_aomi_ldpc'],
                 'network_aomi_adaptive': r['network_aomi_adaptive']
-            } for r in all_results
-        ]).to_csv('results/multi_user_summary_results.csv', index=False)
-        print(f"[{time.strftime('%H:%M:%S')}] Evaluation completed successfully.")
+            }
+            for r in all_results
+        ])
+        summary_df.to_csv('results/multi_user_summary_results.csv', index=False)
+        
+        print("\n=== Multi-User Evaluation Completed Successfully ===")
+        print("Results saved to:")
+        print("  Figures:")
+        print("    - results/accuracy_comparison.png/.pdf")
+        print("    - results/aomi_comparison.png/.pdf") 
+        print("  Data files:")
+        print("    - results/accuracy_results.csv")
+        print("    - results/aomi_results.csv")
+        print("    - results/multi_user_detailed_results.csv")
+        print("    - results/multi_user_summary_results.csv")
+        
+        # Print summary
+        print_summary_table(all_results)
     else:
-        print(f"[{time.strftime('%H:%M:%S')}] Evaluation failed.")
+        print("\n=== Evaluation Failed - No Results Generated ===")
